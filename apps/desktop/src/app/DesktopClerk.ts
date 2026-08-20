@@ -98,11 +98,11 @@ export const make = Effect.gen(function* () {
 
   const bridge = yield* Effect.acquireRelease(
     Effect.try({
-      try: () => createDesktopClerkBridge(environment.stateDir, environment.isDevelopment),
+      try: () => createDesktopClerkBridge(environment.stateDir, environment.isDevelopmentBuild),
       catch: (cause) =>
         new DesktopClerkBridgeInitializationError({
           stateDir: environment.stateDir,
-          isDevelopment: environment.isDevelopment,
+          isDevelopment: environment.isDevelopmentBuild,
           cause,
         }),
     }),
@@ -112,7 +112,7 @@ export const make = Effect.gen(function* () {
         catch: (cause) =>
           new DesktopClerkBridgeCleanupError({
             stateDir: environment.stateDir,
-            isDevelopment: environment.isDevelopment,
+            isDevelopment: environment.isDevelopmentBuild,
             cause,
           }),
       }).pipe(Effect.orDie),
