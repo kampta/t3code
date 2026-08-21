@@ -1232,6 +1232,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(config.productName, "T3 Code (Dev)");
       assert.equal(config.artifactName, "T3-Code-Dev-${version}-${arch}.${ext}");
       assert.notProperty(config, "publish");
+      assert.equal(mac.identity, "-");
+      assert.equal(mac.hardenedRuntime, false);
       assert.deepStrictEqual(mac.protocols, [{ name: "T3 Code", schemes: ["t3code-dev"] }]);
       assert.equal(linuxConfig.appId, "com.t3tools.t3code.dev");
       assert.equal(linux.executableName, "t3code-dev");
