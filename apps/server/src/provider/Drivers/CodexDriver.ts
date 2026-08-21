@@ -47,6 +47,7 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   makePackageManagedProviderMaintenanceResolver,
   normalizeCommandPath,
+  type ProviderMaintenanceCapabilitiesResolver,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
 import {
@@ -67,7 +68,7 @@ function isCodexStandaloneCommandPath(commandPath: string): boolean {
   return normalizeCommandPath(commandPath).includes("/.codex/packages/standalone/");
 }
 
-export const CODEX_PROVIDER_MAINTENANCE = makePackageManagedProviderMaintenanceResolver({
+const CODEX_PACKAGE_MAINTENANCE = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER_KIND,
   npmPackageName: "@openai/codex",
   homebrewFormula: "codex",
@@ -78,6 +79,26 @@ export const CODEX_PROVIDER_MAINTENANCE = makePackageManagedProviderMaintenanceR
     isCommandPath: isCodexStandaloneCommandPath,
   },
 });
+
+export const CODEX_PROVIDER_MAINTENANCE: ProviderMaintenanceCapabilitiesResolver = {
+  resolve: (options) => {
+    const capabilities = CODEX_PACKAGE_MAINTENANCE.resolve(options);
+    const update = capabilities.update;
+    if (update?.lockKey !== "codex-native" || !options?.resolvedCommandPath) {
+      return capabilities;
+    }
+
+    const executable = options.resolvedCommandPath;
+    return {
+      ...capabilities,
+      update: {
+        ...update,
+        command: [executable, ...update.args].join(" "),
+        executable,
+      },
+    };
+  },
+};
 
 /**
  * Services the driver needs to materialize an instance. Surfaced as the

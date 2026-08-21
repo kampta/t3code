@@ -2137,7 +2137,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: "T3 Code",
-          schemes: isDevelopmentBuild ? ["t3code-dev"] : ["t3code", "t3code-dev"],
+          schemes: [isDevelopmentBuild ? "t3code-dev" : "t3code"],
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
@@ -2174,9 +2174,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   }
 
   if (platform === "linux") {
+    const linuxIdentity = isDevelopmentBuild ? "t3code-dev" : "t3code";
     buildConfig.linux = {
       target: [target],
-      executableName: "t3code",
+      executableName: linuxIdentity,
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
@@ -2185,12 +2186,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
+          schemes: [linuxIdentity],
         },
       ],
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          StartupWMClass: linuxIdentity,
         },
       },
     };

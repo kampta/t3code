@@ -16,6 +16,8 @@ export type ModelOption = {
   readonly providerKey: string;
   readonly providerLabel: string;
   readonly providerDriver: string;
+  readonly isProviderReady: boolean;
+  readonly isProviderSelectable: boolean;
   readonly isDefault: boolean;
   readonly isLegacy: boolean;
   readonly capabilities: ModelCapabilities | null;
@@ -126,6 +128,9 @@ export function buildModelOptions(
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
+        isProviderReady: provider.status === "ready",
+        isProviderSelectable:
+          provider.status !== "error" && provider.availability !== "unavailable",
         isDefault: model.isDefault === true,
         isLegacy: model.isLegacy === true,
         capabilities: model.capabilities,
@@ -157,6 +162,8 @@ export function buildModelOptions(
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,
         providerDriver: fallbackModelSelection.instanceId,
+        isProviderReady: true,
+        isProviderSelectable: true,
         isDefault: false,
         isLegacy: false,
         capabilities: null,
@@ -171,18 +178,26 @@ export function buildModelOptions(
 export function resolveDefaultModelSelection(
   options: ReadonlyArray<ModelOption>,
 ): ModelSelection | null {
-  return (
+  const findPreferred = (isUsable: (option: ModelOption) => boolean) =>
     options.find(
       (option) =>
+        isUsable(option) &&
         option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND &&
         option.isDefault &&
         !option.isLegacy,
     )?.selection ??
     options.find(
-      (option) => option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND && !option.isLegacy,
+      (option) =>
+        isUsable(option) &&
+        option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND &&
+        !option.isLegacy,
     )?.selection ??
-    options.find((option) => option.isDefault && !option.isLegacy)?.selection ??
-    options.find((option) => !option.isLegacy)?.selection ??
+    options.find((option) => isUsable(option) && option.isDefault && !option.isLegacy)?.selection ??
+    options.find((option) => isUsable(option) && !option.isLegacy)?.selection;
+
+  return (
+    findPreferred((option) => option.isProviderReady) ??
+    findPreferred((option) => option.isProviderSelectable) ??
     null
   );
 }

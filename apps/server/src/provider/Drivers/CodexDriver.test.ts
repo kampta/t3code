@@ -14,8 +14,8 @@ it("updates standalone Codex through its native updater", () => {
     provider: "codex",
     packageName: "@openai/codex",
     update: {
-      command: "codex update",
-      executable: "codex",
+      command: "/home/user/.local/bin/codex update",
+      executable: "/home/user/.local/bin/codex",
       args: ["update"],
       lockKey: "codex-native",
     },

@@ -20,6 +20,8 @@ describe("mobile model options", () => {
           displayName: "Claude",
           enabled: true,
           installed: true,
+          status: "ready",
+          availability: "available",
           auth: { status: "authenticated" },
           models: [
             {
@@ -37,6 +39,8 @@ describe("mobile model options", () => {
           displayName: "Codex",
           enabled: true,
           installed: true,
+          status: "ready",
+          availability: "available",
           auth: { status: "authenticated" },
           models: [
             {
@@ -54,6 +58,56 @@ describe("mobile model options", () => {
     expect(resolveDefaultModelSelection(buildModelOptions(config, null))).toMatchObject({
       instanceId: "codex",
       model: "gpt-5.6-sol",
+    });
+  });
+
+  it("prefers a ready Claude provider over an errored Codex provider", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "codex",
+          driver: "codex",
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          status: "error",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "gpt-5.6-sol",
+              name: "GPT-5.6 Sol",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+        {
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
+          displayName: "Claude",
+          enabled: true,
+          installed: true,
+          status: "ready",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "claude-fable-5",
+              name: "Claude Fable 5",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(resolveDefaultModelSelection(buildModelOptions(config, null))).toMatchObject({
+      instanceId: "claudeAgent",
+      model: "claude-fable-5",
     });
   });
 

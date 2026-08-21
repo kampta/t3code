@@ -530,7 +530,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // Linux must register the renderer schemes so the generated .desktop
       // entry advertises MimeType=x-scheme-handler/t3code; for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
-        { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
+        { name: "T3 Code", schemes: ["t3code"] },
       ]);
       assert.deepStrictEqual(mac.files, [...DESKTOP_FILE_EXCLUSIONS, ...MAC_FILE_EXCLUSIONS]);
       assert.notProperty(mac.mac as Record<string, unknown>, "sign");
@@ -1189,7 +1189,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.notInclude(error.message, secret);
   });
 
-  it.effect("adds passkey entitlements and both renderer protocols to signed macOS builds", () =>
+  it.effect("adds passkey entitlements and the production protocol to signed macOS builds", () =>
     Effect.gen(function* () {
       const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
         entitlementsPath: "/tmp/entitlements.mac.plist",
@@ -1201,9 +1201,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /\/scripts\/sign-macos\.ts$/);
-      assert.deepStrictEqual(mac.protocols, [
-        { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
-      ]);
+      assert.deepStrictEqual(mac.protocols, [{ name: "T3 Code", schemes: ["t3code"] }]);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
@@ -1218,13 +1216,29 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
         undefined,
       );
+      const linuxConfig = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        "1.2.3-dev.local",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
 
       const mac = config.mac as Record<string, unknown>;
+      const linux = linuxConfig.linux as Record<string, unknown>;
       assert.equal(config.appId, "com.t3tools.t3code.dev");
       assert.equal(config.productName, "T3 Code (Dev)");
       assert.equal(config.artifactName, "T3-Code-Dev-${version}-${arch}.${ext}");
       assert.notProperty(config, "publish");
       assert.deepStrictEqual(mac.protocols, [{ name: "T3 Code", schemes: ["t3code-dev"] }]);
+      assert.equal(linuxConfig.appId, "com.t3tools.t3code.dev");
+      assert.equal(linux.executableName, "t3code-dev");
+      assert.deepStrictEqual(linux.protocols, [{ name: "T3 Code", schemes: ["t3code-dev"] }]);
+      assert.deepStrictEqual(linux.desktop, {
+        entry: { StartupWMClass: "t3code-dev" },
+      });
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(
