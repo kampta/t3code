@@ -25,6 +25,7 @@ import {
   type ServerSettings,
   type ServerProviderState,
 } from "@t3tools/contracts";
+import { DEFAULT_PROVIDER_DRIVER_KIND } from "@t3tools/shared/model";
 
 import { formatProviderDriverKindLabel } from "./providerModels";
 
@@ -307,6 +308,21 @@ export function getDefaultProviderInstanceModel(
 const isSelectableProviderInstanceEntry = (entry: ProviderInstanceEntry): boolean =>
   entry.enabled && entry.isAvailable;
 
+const preferredDefaultInstanceId = defaultInstanceIdForDriver(DEFAULT_PROVIDER_DRIVER_KIND);
+
+function findPreferredProviderInstanceEntry(
+  entries: ReadonlyArray<ProviderInstanceEntry>,
+  predicate: (entry: ProviderInstanceEntry) => boolean,
+): ProviderInstanceEntry | undefined {
+  return (
+    entries.find((entry) => entry.instanceId === preferredDefaultInstanceId && predicate(entry)) ??
+    entries.find(
+      (entry) => entry.driverKind === DEFAULT_PROVIDER_DRIVER_KIND && predicate(entry),
+    ) ??
+    entries.find(predicate)
+  );
+}
+
 /**
  * Resolve an exact stored instance when it remains enabled and available.
  * Otherwise choose a deterministic fallback that can plausibly start now:
@@ -325,8 +341,11 @@ export function resolveSelectableProviderInstanceEntry(
     }
   }
   return (
-    entries.find(isProviderInstancePickerReady) ??
-    entries.find((entry) => isSelectableProviderInstanceEntry(entry) && entry.status !== "error")
+    findPreferredProviderInstanceEntry(entries, isProviderInstancePickerReady) ??
+    findPreferredProviderInstanceEntry(
+      entries,
+      (entry) => isSelectableProviderInstanceEntry(entry) && entry.status !== "error",
+    )
   );
 }
 

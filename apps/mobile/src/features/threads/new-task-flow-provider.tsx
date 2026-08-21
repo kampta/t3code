@@ -32,6 +32,7 @@ import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import {
   buildModelOptions,
   groupByProvider,
+  resolveDefaultModelSelection,
   resolveDefaultableModelSelection,
   resolveSelectableModelSelection,
 } from "../../lib/modelOptions";
@@ -430,8 +431,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const selectedModel =
     draftModelSelection ??
     projectDefaultModelSelection ??
-    modelOptions.find((option) => option.isDefault)?.selection ??
-    modelOptions[0]?.selection ??
+    resolveDefaultModelSelection(modelOptions) ??
     null;
   const selectedModelKey = selectedModel
     ? `${selectedModel.instanceId}:${selectedModel.model}`

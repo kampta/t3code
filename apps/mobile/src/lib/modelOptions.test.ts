@@ -5,11 +5,58 @@ import { ProviderInstanceId, type ServerConfig } from "@t3tools/contracts";
 import {
   buildModelOptions,
   groupByProvider,
+  resolveDefaultModelSelection,
   resolveDefaultableModelSelection,
   resolveSelectableModelSelection,
 } from "./modelOptions";
 
 describe("mobile model options", () => {
+  it("prefers the Codex default when Claude is listed first", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
+          displayName: "Claude",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "claude-fable-5",
+              name: "Claude Fable 5",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+        {
+          instanceId: "codex",
+          driver: "codex",
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "gpt-5.6-sol",
+              name: "GPT-5.6 Sol",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(resolveDefaultModelSelection(buildModelOptions(config, null))).toMatchObject({
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+    });
+  });
+
   it("groups models by provider and flags legacy entries", () => {
     const config = {
       providers: [

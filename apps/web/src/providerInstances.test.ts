@@ -335,6 +335,26 @@ describe("getDefaultProviderInstanceModel", () => {
 });
 
 describe("resolveDefaultProviderModelSelection", () => {
+  it("prefers Codex when multiple ready providers are available", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: "claudeAgent",
+        models: [model("claude-fable-5", false, true)],
+      }),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: [model("gpt-5.6", false, true)],
+      }),
+    ];
+
+    expect(resolveDefaultProviderModelSelection(providers, null)).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6",
+    });
+  });
+
   it.each([
     ["codex", "codex", "gpt-5.6"],
     ["claudeAgent", "claudeAgent", "claude-fable-5"],

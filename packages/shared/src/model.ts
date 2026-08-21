@@ -10,7 +10,7 @@ import {
   type ProviderOptionSelection,
 } from "@t3tools/contracts";
 
-const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
+export const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
 
 export interface SelectableModelOption {
   slug: string;

@@ -5,6 +5,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   buildProviderOptionSelectionsFromDescriptors,
+  DEFAULT_PROVIDER_DRIVER_KIND,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 
@@ -165,6 +166,25 @@ export function buildModelOptions(
   }
 
   return [...options.values()];
+}
+
+export function resolveDefaultModelSelection(
+  options: ReadonlyArray<ModelOption>,
+): ModelSelection | null {
+  return (
+    options.find(
+      (option) =>
+        option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND &&
+        option.isDefault &&
+        !option.isLegacy,
+    )?.selection ??
+    options.find(
+      (option) => option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND && !option.isLegacy,
+    )?.selection ??
+    options.find((option) => option.isDefault && !option.isLegacy)?.selection ??
+    options.find((option) => !option.isLegacy)?.selection ??
+    null
+  );
 }
 
 export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyArray<ProviderGroup> {
