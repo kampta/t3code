@@ -352,10 +352,9 @@ function findPreferredProviderInstanceEntry(
 
 /**
  * Resolve an exact stored instance when it remains enabled and available.
- * Otherwise choose a deterministic fallback that can plausibly start now:
- * ready first, then a non-error probe result. An errored provider is retained
- * only when it was explicitly requested; it is never invented as a new-user
- * default.
+ * Otherwise choose a deterministic ready fallback. Warning and errored
+ * providers are retained only when explicitly requested; neither is invented
+ * as a new-user default.
  */
 export function resolveSelectableProviderInstanceEntry(
   entries: ReadonlyArray<ProviderInstanceEntry>,
@@ -367,20 +366,14 @@ export function resolveSelectableProviderInstanceEntry(
       return requested;
     }
   }
-  return (
-    findPreferredProviderInstanceEntry(entries, isProviderInstancePickerReady) ??
-    findPreferredProviderInstanceEntry(
-      entries,
-      (entry) => isSelectableProviderInstanceEntry(entry) && entry.status !== "error",
-    )
-  );
+  return findPreferredProviderInstanceEntry(entries, isProviderInstancePickerReady);
 }
 
 /**
  * Resolve the routing key for a selection that may reference an instance
  * id that no longer exists (e.g. a persisted thread selection after the
- * user deleted the custom instance). Returns a ready or non-error fallback,
- * or `undefined` when no provider can safely become a new selection.
+ * user deleted the custom instance). Returns a ready fallback, or `undefined`
+ * when no provider can safely become a new selection.
  */
 export function resolveSelectableProviderInstance(
   providers: ReadonlyArray<ServerProvider>,

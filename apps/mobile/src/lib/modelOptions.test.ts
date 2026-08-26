@@ -61,6 +61,56 @@ describe("mobile model options", () => {
     });
   });
 
+  it("prefers the built-in Codex instance over a custom Codex instance", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "codex_work",
+          driver: "codex",
+          displayName: "Codex Work",
+          enabled: true,
+          installed: true,
+          status: "ready",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "gpt-work",
+              name: "GPT Work",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+        {
+          instanceId: "codex",
+          driver: "codex",
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          status: "ready",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "gpt-default",
+              name: "GPT Default",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(resolveDefaultModelSelection(buildModelOptions(config, null))).toMatchObject({
+      instanceId: "codex",
+      model: "gpt-default",
+    });
+  });
+
   it("prefers a ready Claude provider over an errored Codex provider", () => {
     const config = {
       providers: [
@@ -109,6 +159,34 @@ describe("mobile model options", () => {
       instanceId: "claudeAgent",
       model: "claude-fable-5",
     });
+  });
+
+  it("does not select a warning provider as an implicit default", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "codex",
+          driver: "codex",
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          status: "warning",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "gpt-warning",
+              name: "GPT Warning",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(resolveDefaultModelSelection(buildModelOptions(config, null))).toBeNull();
   });
 
   it("groups models by provider and flags legacy entries", () => {

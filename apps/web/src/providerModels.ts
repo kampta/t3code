@@ -2,7 +2,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
-  type ProviderDriverKind,
+  ProviderDriverKind,
   type ModelCapabilities,
   type ProviderInstanceId,
   type ServerProvider,
@@ -66,9 +66,9 @@ export function isProviderEnabled(
   return getProviderSnapshot(providers, provider)?.enabled ?? false;
 }
 
-// Resolve an instance selection to the correlated live driver. If the
-// instance is absent, fall back to a live enabled provider instead of
-// inferring a driver from the missing instance id.
+// Resolve an instance selection to the correlated live driver. An explicit
+// selection remains stable while enabled; implicit fallbacks require a ready,
+// available provider so the surrounding view and composer cannot disagree.
 export function resolveSelectableProvider(
   providers: ReadonlyArray<ServerProvider>,
   provider: ProviderDriverKind | ProviderInstanceId | null | undefined,
@@ -78,14 +78,20 @@ export function resolveSelectableProvider(
     return requestedEntry.driver;
   }
   const preferredInstanceId = defaultInstanceIdForDriver(DEFAULT_PROVIDER_DRIVER_KIND);
+  const isReady = (candidate: ServerProvider) =>
+    candidate.enabled &&
+    candidate.installed &&
+    candidate.status === "ready" &&
+    candidate.availability !== "unavailable";
   return (
-    providers.find((candidate) => candidate.enabled && candidate.instanceId === preferredInstanceId)
-      ?.driver ??
     providers.find(
-      (candidate) => candidate.enabled && candidate.driver === DEFAULT_PROVIDER_DRIVER_KIND,
+      (candidate) => isReady(candidate) && candidate.instanceId === preferredInstanceId,
     )?.driver ??
-    providers.find((candidate) => candidate.enabled)?.driver ??
-    DEFAULT_PROVIDER_DRIVER_KIND
+    providers.find(
+      (candidate) => isReady(candidate) && candidate.driver === DEFAULT_PROVIDER_DRIVER_KIND,
+    )?.driver ??
+    providers.find(isReady)?.driver ??
+    ProviderDriverKind.make("unconfigured")
   );
 }
 
