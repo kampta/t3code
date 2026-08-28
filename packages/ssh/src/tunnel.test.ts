@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - the generated remote shell regression test drives a real child HTTP server and POSIX shell.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
@@ -221,7 +226,9 @@ describe("ssh tunnel scripts", () => {
       buildRemoteLaunchScript(),
       "if (!Number.isInteger(pid) || pid <= 0 || !Number.isInteger(port))",
     );
-    assert.include(buildRemoteLaunchScript(), 'PID_TO_STOP="${REMOTE_PID:-$DEFAULT_RUNTIME_PID}"');
+    assert.include(buildRemoteLaunchScript(), "DEFAULT_RUNTIME_IS_TRACKED_MANAGED=0");
+    assert.include(buildRemoteLaunchScript(), '[ "$REMOTE_PID" = "$DEFAULT_RUNTIME_PID" ]');
+    assert.include(buildRemoteLaunchScript(), 'PID_TO_STOP="$REMOTE_PID"');
     assert.include(buildRemoteLaunchScript(), 'REMOTE_PORT="$DEFAULT_REMOTE_PORT"');
     assert.include(buildRemoteLaunchScript(), 'rm -f "$PID_FILE"');
     assert.include(buildRemoteLaunchScript(), "printf 'external\\n' >\"$MANAGED_FILE\"");
@@ -234,6 +241,78 @@ describe("ssh tunnel scripts", () => {
       buildRemoteLaunchScript().indexOf('DEFAULT_RUNTIME_INFO="$(resolve_default_runtime_port'),
       buildRemoteLaunchScript().indexOf('elif [ -n "$REMOTE_PID" ]'),
     );
+  });
+
+  it("reuses a healthy managed runtime when the default runtime file describes the same process", async () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-ssh-managed-runtime-"));
+    const home = NodePath.join(root, "home");
+    const stateKey = "managed-runtime-regression";
+    const stateDir = NodePath.join(home, ".t3", "ssh-launch", stateKey);
+    const userdataDir = NodePath.join(home, ".t3", "userdata");
+    const runner = {
+      nodeScriptPath: "/unused/t3-server.mjs",
+    } as const;
+    const server = NodeChildProcess.spawn(
+      process.execPath,
+      [
+        "-e",
+        'const http = require("node:http"); const server = http.createServer((_request, response) => { response.writeHead(200); response.end("ok"); }); server.listen(0, "127.0.0.1", () => console.log(server.address().port));',
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+
+    try {
+      const port = await new Promise<number>((resolve, reject) => {
+        server.once("error", reject);
+        server.once("exit", (code) => reject(new Error(`HTTP fixture exited with ${code}.`)));
+        server.stdout.once("data", (chunk) => resolve(Number(String(chunk).trim())));
+      });
+      assert.isNumber(server.pid);
+      NodeFS.mkdirSync(stateDir, { recursive: true });
+      NodeFS.mkdirSync(userdataDir, { recursive: true });
+      NodeFS.writeFileSync(NodePath.join(stateDir, "pid"), `${server.pid}\n`);
+      NodeFS.writeFileSync(NodePath.join(stateDir, "port"), `${port}\n`);
+      NodeFS.writeFileSync(NodePath.join(stateDir, "managed"), "managed\n");
+      NodeFS.writeFileSync(
+        NodePath.join(stateDir, "run-t3.sh"),
+        `${buildRemoteT3RunnerScript(runner)}\n`,
+      );
+      NodeFS.writeFileSync(
+        NodePath.join(userdataDir, "server-runtime.json"),
+        JSON.stringify({ pid: server.pid, port, origin: `http://127.0.0.1:${port}` }),
+      );
+
+      const result = NodeChildProcess.spawnSync("sh", ["-s", "--", stateKey], {
+        encoding: "utf8",
+        env: { ...process.env, HOME: home },
+        input: buildRemoteLaunchScript(runner),
+        timeout: 10_000,
+      });
+
+      if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        return;
+      }
+
+      assert.equal(result.status, 0, result.stderr || result.error?.message);
+      assert.deepEqual(JSON.parse(result.stdout.trim()), {
+        remotePort: port,
+        serverKind: "managed",
+      });
+      assert.isNull(server.exitCode, "the reconnect script must not stop the tracked runtime");
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(stateDir, "pid"), "utf8").trim(),
+        `${server.pid}`,
+      );
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(stateDir, "managed"), "utf8").trim(),
+        "managed",
+      );
+    } finally {
+      if (server.exitCode === null) {
+        server.kill();
+      }
+      NodeFS.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it.effect("accepts launch JSON after remote shell startup noise", () => {
