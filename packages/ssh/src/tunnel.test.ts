@@ -35,6 +35,22 @@ import {
 
 const TEST_NODE_ENGINE_RANGE = "^22.16 || ^23.11 || >=24.10";
 
+function readProcessStart(pid: number): string {
+  const procStatPath = `/proc/${pid}/stat`;
+  if (NodeFS.existsSync(procStatPath)) {
+    const stat = NodeFS.readFileSync(procStatPath, "utf8");
+    const fields = stat
+      .slice(stat.lastIndexOf(") ") + 2)
+      .trim()
+      .split(/\s+/u);
+    return `proc:${fields[19] ?? ""}`;
+  }
+  const result = NodeChildProcess.spawnSync("ps", ["-o", "lstart=", "-p", `${pid}`], {
+    encoding: "utf8",
+  });
+  return `ps:${result.stdout.trim().replace(/\s+/gu, " ")}`;
+}
+
 const makeSuccessfulProcess = (stdout: string) => {
   const stdoutStream = Stream.make(new TextEncoder().encode(stdout));
   return ChildProcessSpawner.makeHandle({
@@ -179,7 +195,7 @@ describe("ssh tunnel scripts", () => {
 
     assert.include(
       buildRemoteLaunchScript({ nodeEngineRange: TEST_NODE_ENGINE_RANGE }),
-      '[ -n "$REMOTE_PID" ] && [ -n "$REMOTE_PORT" ] && kill -0 "$REMOTE_PID" 2>/dev/null',
+      'REMOTE_PROCESS_START="$(cat "$PROCESS_START_FILE" 2>/dev/null || true)"',
     );
     assert.include(buildRemoteLaunchScript(), "RUNNER_CHANGED=1");
     assert.include(buildRemoteLaunchScript(), 'RUNNER_ID_FILE="$STATE_DIR/runner-id"');
@@ -214,10 +230,11 @@ describe("ssh tunnel scripts", () => {
     assert.include(buildRemotePairingScript(target, { packageSpec: "t3@nightly" }), "t3@nightly");
     assert.include(
       buildRemoteStopScript(target),
-      'if [ "$REMOTE_MANAGED" != "external" ] && [ -n "$REMOTE_PID" ]',
+      'if [ "$REMOTE_MANAGED" != "external" ] && managed_pid_is_owned',
     );
     assert.include(buildRemoteStopScript(target), 'kill "$REMOTE_PID" 2>/dev/null || true');
-    assert.include(buildRemoteStopScript(target), 'rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE"');
+    assert.include(buildRemoteStopScript(target), 'PROCESS_START_FILE="$STATE_DIR/process-start"');
+    assert.include(buildRemoteStopScript(target), "managed_pid_is_owned");
     assert.include(
       buildRemoteLaunchScript(),
       'DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"',
@@ -233,7 +250,8 @@ describe("ssh tunnel scripts", () => {
     );
     assert.include(buildRemoteLaunchScript(), "DEFAULT_RUNTIME_IS_TRACKED_MANAGED=0");
     assert.include(buildRemoteLaunchScript(), '[ "$REMOTE_PID" = "$DEFAULT_RUNTIME_PID" ]');
-    assert.include(buildRemoteLaunchScript(), 'PID_TO_STOP="$REMOTE_PID"');
+    assert.include(buildRemoteLaunchScript(), 'PROCESS_START_FILE="$STATE_DIR/process-start"');
+    assert.include(buildRemoteLaunchScript(), "managed_pid_is_owned");
     assert.include(buildRemoteLaunchScript(), 'REMOTE_PORT="$DEFAULT_REMOTE_PORT"');
     assert.include(buildRemoteLaunchScript(), 'rm -f "$PID_FILE"');
     assert.include(buildRemoteLaunchScript(), "printf 'external\\n' >\"$MANAGED_FILE\"");
@@ -244,7 +262,7 @@ describe("ssh tunnel scripts", () => {
     );
     assert.isBelow(
       buildRemoteLaunchScript().indexOf('DEFAULT_RUNTIME_INFO="$(resolve_default_runtime_port'),
-      buildRemoteLaunchScript().indexOf('elif [ -n "$REMOTE_PID" ]'),
+      buildRemoteLaunchScript().indexOf('elif [ -n "$REMOTE_PORT" ] && managed_pid_is_owned'),
     );
   });
 
@@ -285,6 +303,10 @@ describe("ssh tunnel scripts", () => {
       NodeFS.writeFileSync(NodePath.join(stateDir, "pid"), `${server.pid}\n`);
       NodeFS.writeFileSync(NodePath.join(stateDir, "port"), `${port}\n`);
       NodeFS.writeFileSync(NodePath.join(stateDir, "managed"), "managed\n");
+      NodeFS.writeFileSync(
+        NodePath.join(stateDir, "process-start"),
+        `${readProcessStart(server.pid!)}\n`,
+      );
       NodeFS.writeFileSync(NodePath.join(stateDir, "run-t3.sh"), "previously bundled formatting\n");
       NodeFS.writeFileSync(
         NodePath.join(stateDir, "runner-id"),
@@ -324,6 +346,27 @@ describe("ssh tunnel scripts", () => {
         NodeFS.readFileSync(NodePath.join(stateDir, "run-t3.sh"), "utf8"),
         `${buildRemoteT3RunnerScript(runner)}\n`,
       );
+
+      NodeFS.writeFileSync(NodePath.join(stateDir, "process-start"), "stale-process-start\n");
+      const staleIdentityResult = NodeChildProcess.spawnSync("sh", ["-s", "--", stateKey], {
+        encoding: "utf8",
+        env: { ...process.env, HOME: home },
+        input: buildRemoteLaunchScript(runner),
+        timeout: 10_000,
+      });
+
+      assert.equal(
+        staleIdentityResult.status,
+        0,
+        staleIdentityResult.stderr || staleIdentityResult.error?.message,
+      );
+      assert.deepEqual(JSON.parse(staleIdentityResult.stdout.trim()), {
+        remotePort: port,
+        serverKind: "external",
+      });
+      assert.isNull(server.exitCode, "a stale PID identity must never be signaled");
+      assert.isFalse(NodeFS.existsSync(NodePath.join(stateDir, "pid")));
+      assert.isFalse(NodeFS.existsSync(NodePath.join(stateDir, "process-start")));
     } finally {
       if (server.exitCode === null) {
         server.kill();

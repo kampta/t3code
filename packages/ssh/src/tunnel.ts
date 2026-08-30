@@ -461,10 +461,12 @@ DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"
 PORT_FILE="$STATE_DIR/port"
 PID_FILE="$STATE_DIR/pid"
 MANAGED_FILE="$STATE_DIR/managed"
+PROCESS_START_FILE="$STATE_DIR/process-start"
 LOG_FILE="$STATE_DIR/server.log"
 RUNNER_FILE="$STATE_DIR/run-t3.sh"
 RUNNER_ID_FILE="$STATE_DIR/runner-id"
 RUNNER_ID=@@T3_RUNNER_ID@@
+EXPECTED_NODE_SCRIPT_PATH=@@T3_EXPECTED_NODE_SCRIPT_PATH@@
 RUNNER_NEXT="$STATE_DIR/run-t3.next.$$"
 mkdir -p "$STATE_DIR"
 cleanup_runner_next() {
@@ -503,6 +505,36 @@ wait_for_pid_exit() {
     sleep 0.1
   done
 }
+managed_process_start() {
+  PID_TO_IDENTIFY="$1"
+  if [ -r "/proc/$PID_TO_IDENTIFY/stat" ]; then
+    PROCESS_START="$(sed 's/^.*) //' "/proc/$PID_TO_IDENTIFY/stat" | awk '{print $20}')"
+    if [ -n "$PROCESS_START" ]; then
+      printf 'proc:%s\n' "$PROCESS_START"
+    fi
+    return
+  fi
+  PROCESS_START="$(ps -o lstart= -p "$PID_TO_IDENTIFY" 2>/dev/null | awk '{$1=$1; print}')"
+  if [ -n "$PROCESS_START" ]; then
+    printf 'ps:%s\n' "$PROCESS_START"
+  fi
+}
+managed_pid_is_owned() {
+  [ -n "\${REMOTE_PID:-}" ] &&
+    [ -n "\${REMOTE_PROCESS_START:-}" ] &&
+    kill -0 "$REMOTE_PID" 2>/dev/null &&
+    [ "$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)" = "$REMOTE_PROCESS_START" ]
+}
+tracked_managed_pid_matches_command() {
+  [ -n "$REMOTE_PID" ] &&
+    [ -n "$REMOTE_PORT" ] &&
+    [ -n "$EXPECTED_NODE_SCRIPT_PATH" ] &&
+    [ -r "/proc/$REMOTE_PID/cmdline" ] || return 1
+  PROCESS_ARGS="$(tr '\\000' '\\n' <"/proc/$REMOTE_PID/cmdline")"
+  for EXPECTED_ARG in "$EXPECTED_NODE_SCRIPT_PATH" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME"; do
+    printf '%s\\n' "$PROCESS_ARGS" | grep -Fqx -- "$EXPECTED_ARG" || return 1
+  done
+}
 resolve_default_runtime_port() {
   node - "$DEFAULT_RUNTIME_FILE" <<'NODE'
 const fs = require("node:fs");
@@ -528,6 +560,7 @@ NODE
 REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
 REMOTE_PORT="$(cat "$PORT_FILE" 2>/dev/null || true)"
 REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
+REMOTE_PROCESS_START="$(cat "$PROCESS_START_FILE" 2>/dev/null || true)"
 DEFAULT_RUNTIME_INFO="$(resolve_default_runtime_port 2>/dev/null || true)"
 DEFAULT_RUNTIME_PID=""
 DEFAULT_REMOTE_PORT=""
@@ -536,58 +569,73 @@ if [ -n "$DEFAULT_RUNTIME_INFO" ]; then
   DEFAULT_REMOTE_PORT="\${DEFAULT_RUNTIME_INFO#* }"
 fi
 DEFAULT_RUNTIME_IS_TRACKED_MANAGED=0
-if [ "$REMOTE_MANAGED" = "managed" ] && [ -n "$REMOTE_PID" ] && [ "$REMOTE_PID" = "$DEFAULT_RUNTIME_PID" ]; then
-  DEFAULT_RUNTIME_IS_TRACKED_MANAGED=1
+if [ "$REMOTE_MANAGED" = "managed" ] && [ "$REMOTE_PID" = "$DEFAULT_RUNTIME_PID" ]; then
+  if ! managed_pid_is_owned && tracked_managed_pid_matches_command; then
+    REMOTE_PROCESS_START="$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)"
+    if [ -n "$REMOTE_PROCESS_START" ]; then
+      printf '%s\\n' "$REMOTE_PROCESS_START" >"$PROCESS_START_FILE"
+    fi
+  fi
+  if managed_pid_is_owned; then
+    DEFAULT_RUNTIME_IS_TRACKED_MANAGED=1
+  fi
 fi
 if [ -n "$DEFAULT_REMOTE_PORT" ] && [ "$DEFAULT_RUNTIME_IS_TRACKED_MANAGED" -eq 0 ]; then
   REMOTE_PORT="$DEFAULT_REMOTE_PORT"
   if wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
     if [ "$REMOTE_MANAGED" = "managed" ]; then
-      PID_TO_STOP="$REMOTE_PID"
-      if [ -n "$PID_TO_STOP" ] && kill -0 "$PID_TO_STOP" 2>/dev/null; then
-        kill "$PID_TO_STOP" 2>/dev/null || true
-        wait_for_pid_exit "$PID_TO_STOP"
+      if managed_pid_is_owned; then
+        kill "$REMOTE_PID" 2>/dev/null || true
+        wait_for_pid_exit "$REMOTE_PID"
       fi
       REMOTE_PID=""
+      REMOTE_PROCESS_START=""
       REMOTE_PORT="$DEFAULT_REMOTE_PORT"
       REMOTE_MANAGED="external"
-      rm -f "$PID_FILE"
+      rm -f "$PID_FILE" "$PROCESS_START_FILE"
       printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
       printf 'external\\n' >"$MANAGED_FILE"
     else
       printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
       printf 'external\\n' >"$MANAGED_FILE"
       REMOTE_PID=""
+      REMOTE_PROCESS_START=""
       REMOTE_MANAGED="external"
+      rm -f "$PROCESS_START_FILE"
     fi
   else
     REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
     REMOTE_PORT="$(cat "$PORT_FILE" 2>/dev/null || true)"
     REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
+    REMOTE_PROCESS_START="$(cat "$PROCESS_START_FILE" 2>/dev/null || true)"
   fi
 fi
 if [ "$REMOTE_MANAGED" = "external" ]; then
   if [ -z "$REMOTE_PORT" ] || ! wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
     REMOTE_PID=""
+    REMOTE_PROCESS_START=""
     REMOTE_PORT=""
     REMOTE_MANAGED=""
   fi
-elif [ -n "$REMOTE_PID" ] && [ -n "$REMOTE_PORT" ] && kill -0 "$REMOTE_PID" 2>/dev/null; then
+elif [ -n "$REMOTE_PORT" ] && managed_pid_is_owned; then
   if [ "$RUNNER_CHANGED" -eq 1 ]; then
     kill "$REMOTE_PID" 2>/dev/null || true
     wait_for_pid_exit "$REMOTE_PID"
     REMOTE_PID=""
+    REMOTE_PROCESS_START=""
     REMOTE_PORT=""
     REMOTE_MANAGED=""
   elif ! wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
     kill "$REMOTE_PID" 2>/dev/null || true
     wait_for_pid_exit "$REMOTE_PID"
     REMOTE_PID=""
+    REMOTE_PROCESS_START=""
     REMOTE_PORT=""
     REMOTE_MANAGED=""
   fi
 else
   REMOTE_PID=""
+  REMOTE_PROCESS_START=""
   REMOTE_PORT=""
   REMOTE_MANAGED=""
 fi
@@ -599,9 +647,15 @@ if [ -z "$REMOTE_PORT" ]; then
   fi
   nohup env T3CODE_NO_BROWSER=1 "$RUNNER_FILE" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME" >>"$LOG_FILE" 2>&1 < /dev/null &
   REMOTE_PID="$!"
+  REMOTE_PROCESS_START="$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)"
+  if [ -z "$REMOTE_PROCESS_START" ]; then
+    printf 'Remote T3 server process identity could not be recorded safely.\\n' >&2
+    exit 1
+  fi
   printf '%s\\n' "$REMOTE_PID" >"$PID_FILE"
   printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
   printf 'managed\\n' >"$MANAGED_FILE"
+  printf '%s\\n' "$REMOTE_PROCESS_START" >"$PROCESS_START_FILE"
   if ! wait_ready "@@T3_READY_TIMEOUT_MS@@"; then
     printf 'Remote T3 server did not become ready on 127.0.0.1:%s.\\n' "$REMOTE_PORT" >&2
     if [ -s "$LOG_FILE" ]; then
@@ -609,9 +663,11 @@ if [ -z "$REMOTE_PORT" ]; then
     else
       printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
     fi
-    kill "$REMOTE_PID" 2>/dev/null || true
-    wait_for_pid_exit "$REMOTE_PID"
-    rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE"
+    if managed_pid_is_owned; then
+      kill "$REMOTE_PID" 2>/dev/null || true
+      wait_for_pid_exit "$REMOTE_PID"
+    fi
+    rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$PROCESS_START_FILE"
     exit 1
   fi
 fi
@@ -636,9 +692,31 @@ STATE_DIR="$HOME/.t3/ssh-launch/@@T3_STATE_KEY@@"
 PID_FILE="$STATE_DIR/pid"
 PORT_FILE="$STATE_DIR/port"
 MANAGED_FILE="$STATE_DIR/managed"
+PROCESS_START_FILE="$STATE_DIR/process-start"
 REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
 REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
-if [ "$REMOTE_MANAGED" != "external" ] && [ -n "$REMOTE_PID" ] && kill -0 "$REMOTE_PID" 2>/dev/null; then
+REMOTE_PROCESS_START="$(cat "$PROCESS_START_FILE" 2>/dev/null || true)"
+managed_process_start() {
+  PID_TO_IDENTIFY="$1"
+  if [ -r "/proc/$PID_TO_IDENTIFY/stat" ]; then
+    PROCESS_START="$(sed 's/^.*) //' "/proc/$PID_TO_IDENTIFY/stat" | awk '{print $20}')"
+    if [ -n "$PROCESS_START" ]; then
+      printf 'proc:%s\n' "$PROCESS_START"
+    fi
+    return
+  fi
+  PROCESS_START="$(ps -o lstart= -p "$PID_TO_IDENTIFY" 2>/dev/null | awk '{$1=$1; print}')"
+  if [ -n "$PROCESS_START" ]; then
+    printf 'ps:%s\n' "$PROCESS_START"
+  fi
+}
+managed_pid_is_owned() {
+  [ -n "$REMOTE_PID" ] &&
+    [ -n "$REMOTE_PROCESS_START" ] &&
+    kill -0 "$REMOTE_PID" 2>/dev/null &&
+    [ "$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)" = "$REMOTE_PROCESS_START" ]
+}
+if [ "$REMOTE_MANAGED" != "external" ] && managed_pid_is_owned; then
   kill "$REMOTE_PID" 2>/dev/null || true
   WAIT_COUNT=0
   while kill -0 "$REMOTE_PID" 2>/dev/null && [ "$WAIT_COUNT" -lt 20 ]; do
@@ -646,7 +724,7 @@ if [ "$REMOTE_MANAGED" != "external" ] && [ -n "$REMOTE_PID" ] && kill -0 "$REMO
     sleep 0.1
   done
 fi
-rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE"
+rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$PROCESS_START_FILE"
 printf '{"stopped":true}\\n'
 `;
 
@@ -693,6 +771,7 @@ export function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
     T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
     T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteT3RunnerScript(input)),
     T3_RUNNER_ID: shellSingleQuote(buildRemoteT3RunnerIdentity(input)),
+    T3_EXPECTED_NODE_SCRIPT_PATH: shellSingleQuote(input?.nodeScriptPath?.trim() || ""),
     T3_PICK_PORT_SCRIPT: stripTrailingNewlines(REMOTE_PICK_PORT_SCRIPT),
     T3_WAIT_READY_SCRIPT: stripTrailingNewlines(REMOTE_WAIT_READY_SCRIPT),
     T3_DEFAULT_REMOTE_PORT: String(DEFAULT_REMOTE_PORT),
