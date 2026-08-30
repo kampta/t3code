@@ -72,10 +72,27 @@ function isCodexStandaloneReleaseCommandPath(commandPath: string): boolean {
   return normalizeCommandPath(commandPath).includes("/.codex/packages/standalone/releases/");
 }
 
-function quotePosixCommandPath(commandPath: string): string {
-  return /^[A-Za-z0-9_./:@%+=,-]+$/u.test(commandPath)
-    ? commandPath
-    : `'${commandPath.replaceAll("'", "'\\''")}'`;
+function quotePosixCommandArgument(argument: string): string {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/u.test(argument)
+    ? argument
+    : `'${argument.replaceAll("'", "'\\''")}'`;
+}
+
+function formatStandaloneUpdateCommand(
+  executable: string,
+  args: ReadonlyArray<string>,
+  platform: NodeJS.Platform | undefined,
+): string {
+  if (platform === "win32") {
+    const script = [
+      `& '${executable.replaceAll("'", "''")}'`,
+      ...args.map((arg) =>
+        /^[A-Za-z0-9_.:@%+=,-]+$/u.test(arg) ? arg : `'${arg.replaceAll("'", "''")}'`,
+      ),
+    ].join(" ");
+    return `powershell.exe -NoProfile -Command "${script}"`;
+  }
+  return [quotePosixCommandArgument(executable), ...args.map(quotePosixCommandArgument)].join(" ");
 }
 
 const CODEX_PACKAGE_MAINTENANCE = makePackageManagedProviderMaintenanceResolver({
@@ -106,7 +123,7 @@ export const CODEX_PROVIDER_MAINTENANCE: ProviderMaintenanceCapabilitiesResolver
       ...capabilities,
       update: {
         ...update,
-        command: [quotePosixCommandPath(executable), ...update.args].join(" "),
+        command: formatStandaloneUpdateCommand(executable, update.args, options.platform),
         executable,
       },
     };

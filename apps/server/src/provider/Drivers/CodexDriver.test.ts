@@ -63,3 +63,19 @@ it("quotes standalone launchers with shell-sensitive paths", () => {
     executable: "/home/First Last/.local/bin/codex",
   });
 });
+
+it("formats Windows standalone updates through PowerShell", () => {
+  expect(
+    CODEX_PROVIDER_MAINTENANCE.resolve({
+      binaryPath: "codex",
+      platform: "win32",
+      resolvedCommandPath: "C:\\Users\\First Last\\.local\\bin\\codex.exe",
+      realCommandPath:
+        "C:\\Users\\First Last\\.codex\\packages\\standalone\\current\\bin\\codex.exe",
+    }).update,
+  ).toMatchObject({
+    command:
+      "powershell.exe -NoProfile -Command \"& 'C:\\Users\\First Last\\.local\\bin\\codex.exe' update\"",
+    executable: "C:\\Users\\First Last\\.local\\bin\\codex.exe",
+  });
+});
