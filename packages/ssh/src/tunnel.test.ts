@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - the generated remote shell regression test drives a real child HTTP server and POSIX shell.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
@@ -200,6 +201,7 @@ describe("ssh tunnel scripts", () => {
     assert.notInclude(buildRemoteLaunchScript(), "server-home");
     assert.include(buildRemoteLaunchScript(), "Remote T3 server did not become ready");
     assert.include(buildRemoteLaunchScript(), 'wait_ready "60000"');
+    assert.include(buildRemoteLaunchScript(), 'wait_ready "15000"');
     assert.include(buildRemoteLaunchScript(), 'if [ -s "$LOG_FILE" ]; then');
     assert.include(buildRemoteLaunchScript(), "It wrote nothing to %s");
     assert.include(buildRemoteLaunchScript({ packageSpec: "t3@nightly" }), "t3@nightly");
@@ -255,21 +257,28 @@ describe("ssh tunnel scripts", () => {
     const runner = {
       nodeScriptPath: "/unused/t3-server.mjs",
     } as const;
+    const reservation = NodeNet.createServer();
+    await new Promise<void>((resolve, reject) => {
+      reservation.once("error", reject);
+      reservation.listen(0, "127.0.0.1", resolve);
+    });
+    const address = reservation.address();
+    assert.isObject(address);
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    await new Promise<void>((resolve, reject) =>
+      reservation.close((error) => (error ? reject(error) : resolve())),
+    );
     const server = NodeChildProcess.spawn(
       process.execPath,
       [
         "-e",
-        'const http = require("node:http"); const server = http.createServer((_request, response) => { response.writeHead(200); response.end("ok"); }); server.listen(0, "127.0.0.1", () => console.log(server.address().port));',
+        'const http = require("node:http"); const port = Number(process.argv[1]); const server = http.createServer((_request, response) => { response.writeHead(200); response.end("ok"); }); setTimeout(() => server.listen(port, "127.0.0.1"), 3000);',
+        `${port}`,
       ],
-      { stdio: ["ignore", "pipe", "inherit"] },
+      { stdio: ["ignore", "ignore", "inherit"] },
     );
 
     try {
-      const port = await new Promise<number>((resolve, reject) => {
-        server.once("error", reject);
-        server.once("exit", (code) => reject(new Error(`HTTP fixture exited with ${code}.`)));
-        server.stdout.once("data", (chunk) => resolve(Number(String(chunk).trim())));
-      });
       assert.isNumber(server.pid);
       NodeFS.mkdirSync(stateDir, { recursive: true });
       NodeFS.mkdirSync(userdataDir, { recursive: true });
