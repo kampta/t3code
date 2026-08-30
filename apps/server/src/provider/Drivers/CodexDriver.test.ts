@@ -36,3 +36,30 @@ it("keeps npm updates for npm-managed Codex", () => {
     lockKey: "npm-global",
   });
 });
+
+it("does not offer an in-place update for a pinned standalone release", () => {
+  expect(
+    CODEX_PROVIDER_MAINTENANCE.resolve({
+      binaryPath:
+        "/home/user/.codex/packages/standalone/releases/0.148.0-aarch64-unknown-linux-musl/bin/codex",
+      resolvedCommandPath:
+        "/home/user/.codex/packages/standalone/releases/0.148.0-aarch64-unknown-linux-musl/bin/codex",
+      realCommandPath:
+        "/home/user/.codex/packages/standalone/releases/0.148.0-aarch64-unknown-linux-musl/bin/codex",
+    }).update,
+  ).toBeNull();
+});
+
+it("quotes standalone launchers with shell-sensitive paths", () => {
+  expect(
+    CODEX_PROVIDER_MAINTENANCE.resolve({
+      binaryPath: "codex",
+      resolvedCommandPath: "/home/First Last/.local/bin/codex",
+      realCommandPath:
+        "/home/First Last/.codex/packages/standalone/releases/0.148.0-aarch64-unknown-linux-musl/bin/codex",
+    }).update,
+  ).toMatchObject({
+    command: "'/home/First Last/.local/bin/codex' update",
+    executable: "/home/First Last/.local/bin/codex",
+  });
+});

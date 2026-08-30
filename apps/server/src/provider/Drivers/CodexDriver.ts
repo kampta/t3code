@@ -68,6 +68,16 @@ function isCodexStandaloneCommandPath(commandPath: string): boolean {
   return normalizeCommandPath(commandPath).includes("/.codex/packages/standalone/");
 }
 
+function isCodexStandaloneReleaseCommandPath(commandPath: string): boolean {
+  return normalizeCommandPath(commandPath).includes("/.codex/packages/standalone/releases/");
+}
+
+function quotePosixCommandPath(commandPath: string): string {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/u.test(commandPath)
+    ? commandPath
+    : `'${commandPath.replaceAll("'", "'\\''")}'`;
+}
+
 const CODEX_PACKAGE_MAINTENANCE = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER_KIND,
   npmPackageName: "@openai/codex",
@@ -89,11 +99,14 @@ export const CODEX_PROVIDER_MAINTENANCE: ProviderMaintenanceCapabilitiesResolver
     }
 
     const executable = options.resolvedCommandPath;
+    if (isCodexStandaloneReleaseCommandPath(executable)) {
+      return { ...capabilities, update: null };
+    }
     return {
       ...capabilities,
       update: {
         ...update,
-        command: [executable, ...update.args].join(" "),
+        command: [quotePosixCommandPath(executable), ...update.args].join(" "),
         executable,
       },
     };
