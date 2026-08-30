@@ -90,7 +90,8 @@ function formatStandaloneUpdateCommand(
         /^[A-Za-z0-9_.:@%+=,-]+$/u.test(arg) ? arg : `'${arg.replaceAll("'", "''")}'`,
       ),
     ].join(" ");
-    return `powershell.exe -NoProfile -Command "${script}"`;
+    const encodedScript = Buffer.from(script, "utf16le").toString("base64");
+    return `powershell.exe -NoProfile -EncodedCommand ${encodedScript}`;
   }
   return [quotePosixCommandArgument(executable), ...args.map(quotePosixCommandArgument)].join(" ");
 }

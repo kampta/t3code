@@ -65,17 +65,20 @@ it("quotes standalone launchers with shell-sensitive paths", () => {
 });
 
 it("formats Windows standalone updates through PowerShell", () => {
-  expect(
-    CODEX_PROVIDER_MAINTENANCE.resolve({
-      binaryPath: "codex",
-      platform: "win32",
-      resolvedCommandPath: "C:\\Users\\First Last\\.local\\bin\\codex.exe",
-      realCommandPath:
-        "C:\\Users\\First Last\\.codex\\packages\\standalone\\current\\bin\\codex.exe",
-    }).update,
-  ).toMatchObject({
-    command:
-      "powershell.exe -NoProfile -Command \"& 'C:\\Users\\First Last\\.local\\bin\\codex.exe' update\"",
-    executable: "C:\\Users\\First Last\\.local\\bin\\codex.exe",
-  });
+  const executable = "C:\\Users\\First $Last\\.local\\bin\\codex.exe";
+  const update = CODEX_PROVIDER_MAINTENANCE.resolve({
+    binaryPath: "codex",
+    platform: "win32",
+    resolvedCommandPath: executable,
+    realCommandPath:
+      "C:\\Users\\First $Last\\.codex\\packages\\standalone\\current\\bin\\codex.exe",
+  }).update;
+
+  expect(update).not.toBeNull();
+  expect(update?.executable).toBe(executable);
+  const encodedCommand = update?.command.split(" ").at(-1);
+  expect(encodedCommand).toBeTruthy();
+  expect(Buffer.from(encodedCommand!, "base64").toString("utf16le")).toBe(
+    `& '${executable}' update`,
+  );
 });
