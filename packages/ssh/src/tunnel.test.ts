@@ -329,7 +329,9 @@ describe("ssh tunnel scripts", () => {
       }
 
       assert.equal(result.status, 0, result.stderr || result.error?.message);
-      assert.deepEqual(JSON.parse(result.stdout.trim()), {
+      const output = result.stdout.trim();
+      assert.isNotEmpty(output, JSON.stringify({ stderr: result.stderr, error: result.error }));
+      assert.deepEqual(JSON.parse(output), {
         remotePort: port,
         serverKind: "managed",
       });
@@ -367,6 +369,113 @@ describe("ssh tunnel scripts", () => {
       assert.isNull(server.exitCode, "a stale PID identity must never be signaled");
       assert.isFalse(NodeFS.existsSync(NodePath.join(stateDir, "pid")));
       assert.isFalse(NodeFS.existsSync(NodePath.join(stateDir, "process-start")));
+    } finally {
+      if (server.exitCode === null) {
+        server.kill();
+      }
+      NodeFS.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates and stops a legacy package-managed runtime after verifying its command", async () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-ssh-package-migration-"));
+    const home = NodePath.join(root, "home");
+    const target = {
+      alias: "devbox",
+      hostname: "devbox.example.com",
+      username: "julius",
+      port: 2222,
+    } as const;
+    const stopScript = buildRemoteStopScript(target);
+    const stateKey = /ssh-launch\/([^"/]+)"/u.exec(stopScript)?.[1];
+    assert.isString(stateKey);
+    if (!stateKey) throw new Error("stop script did not contain its SSH state key");
+    const stateDir = NodePath.join(home, ".t3", "ssh-launch", stateKey);
+    const userdataDir = NodePath.join(home, ".t3", "userdata");
+    const serverEntry = NodePath.join(root, "node_modules", "t3", "dist", "bin.mjs");
+    const runner = { packageSpec: "t3@0.0.36" } as const;
+    NodeFS.mkdirSync(NodePath.dirname(serverEntry), { recursive: true });
+    NodeFS.writeFileSync(
+      serverEntry,
+      'import http from "node:http"; const args = process.argv.slice(2); const port = Number(args[args.indexOf("--port") + 1]); const server = http.createServer((_request, response) => { response.writeHead(200); response.end("ok"); }); server.listen(port, "127.0.0.1");',
+    );
+    const reservation = NodeNet.createServer();
+    await new Promise<void>((resolve, reject) => {
+      reservation.once("error", reject);
+      reservation.listen(0, "127.0.0.1", resolve);
+    });
+    const address = reservation.address();
+    assert.isObject(address);
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    await new Promise<void>((resolve, reject) =>
+      reservation.close((error) => (error ? reject(error) : resolve())),
+    );
+    const server = NodeChildProcess.spawn(
+      process.execPath,
+      [
+        serverEntry,
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        `${port}`,
+        "--base-dir",
+        NodePath.join(home, ".t3"),
+      ],
+      { stdio: ["ignore", "ignore", "inherit"] },
+    );
+
+    try {
+      assert.isNumber(server.pid);
+      NodeFS.mkdirSync(stateDir, { recursive: true });
+      NodeFS.mkdirSync(userdataDir, { recursive: true });
+      NodeFS.writeFileSync(NodePath.join(stateDir, "pid"), `${server.pid}\n`);
+      NodeFS.writeFileSync(NodePath.join(stateDir, "port"), `${port}\n`);
+      NodeFS.writeFileSync(NodePath.join(stateDir, "managed"), "managed\n");
+      NodeFS.writeFileSync(NodePath.join(stateDir, "run-t3.sh"), "legacy package runner\n");
+      NodeFS.writeFileSync(
+        NodePath.join(stateDir, "runner-id"),
+        `${buildRemoteT3RunnerIdentity(runner)}\n`,
+      );
+      NodeFS.writeFileSync(
+        NodePath.join(userdataDir, "server-runtime.json"),
+        JSON.stringify({ pid: server.pid, port, origin: `http://127.0.0.1:${port}` }),
+      );
+
+      const launchResult = NodeChildProcess.spawnSync("sh", ["-s", "--", stateKey], {
+        encoding: "utf8",
+        env: { ...process.env, HOME: home },
+        input: buildRemoteLaunchScript(runner),
+        timeout: 10_000,
+      });
+
+      assert.equal(launchResult.status, 0, launchResult.stderr || launchResult.error?.message);
+      const launchOutput = launchResult.stdout.trim();
+      assert.isNotEmpty(
+        launchOutput,
+        JSON.stringify({ stderr: launchResult.stderr, error: launchResult.error }),
+      );
+      assert.deepEqual(JSON.parse(launchOutput), {
+        remotePort: port,
+        serverKind: "managed",
+      });
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(stateDir, "process-start"), "utf8").trim(),
+        readProcessStart(server.pid!),
+      );
+
+      const stopResult = NodeChildProcess.spawnSync("sh", ["-s"], {
+        encoding: "utf8",
+        env: { ...process.env, HOME: home },
+        input: stopScript,
+        timeout: 10_000,
+      });
+      assert.equal(stopResult.status, 0, stopResult.stderr || stopResult.error?.message);
+      assert.deepEqual(JSON.parse(stopResult.stdout.trim()), { stopped: true });
+      if (server.exitCode === null) {
+        await new Promise<void>((resolve) => server.once("exit", () => resolve()));
+      }
+      assert.equal(server.signalCode, "SIGTERM");
     } finally {
       if (server.exitCode === null) {
         server.kill();

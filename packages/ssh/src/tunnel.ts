@@ -488,6 +488,7 @@ RUNNER_FILE="$STATE_DIR/run-t3.sh"
 RUNNER_ID_FILE="$STATE_DIR/runner-id"
 RUNNER_ID=@@T3_RUNNER_ID@@
 EXPECTED_NODE_SCRIPT_PATH=@@T3_EXPECTED_NODE_SCRIPT_PATH@@
+EXPECTED_PACKAGE_SPEC=@@T3_EXPECTED_PACKAGE_SPEC@@
 RUNNER_NEXT="$STATE_DIR/run-t3.next.$$"
 mkdir -p "$STATE_DIR"
 cleanup_runner_next() {
@@ -529,13 +530,40 @@ wait_for_pid_exit() {
 @@T3_MANAGED_PROCESS_IDENTITY_SCRIPT@@
 tracked_managed_pid_matches_command() {
   [ -n "$REMOTE_PID" ] &&
-    [ -n "$REMOTE_PORT" ] &&
-    [ -n "$EXPECTED_NODE_SCRIPT_PATH" ] &&
-    [ -r "/proc/$REMOTE_PID/cmdline" ] || return 1
-  PROCESS_ARGS="$(tr '\\000' '\\n' <"/proc/$REMOTE_PID/cmdline")"
-  for EXPECTED_ARG in "$EXPECTED_NODE_SCRIPT_PATH" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME"; do
-    printf '%s\\n' "$PROCESS_ARGS" | grep -Fqx -- "$EXPECTED_ARG" || return 1
-  done
+    [ -n "$REMOTE_PORT" ] || return 1
+  if [ -r "/proc/$REMOTE_PID/cmdline" ]; then
+    PROCESS_ARGS="$(tr '\\000' '\\n' <"/proc/$REMOTE_PID/cmdline")"
+    for EXPECTED_ARG in serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME"; do
+      printf '%s\\n' "$PROCESS_ARGS" | grep -Fqx -- "$EXPECTED_ARG" || return 1
+    done
+    if [ -n "$EXPECTED_NODE_SCRIPT_PATH" ]; then
+      printf '%s\\n' "$PROCESS_ARGS" | grep -Fqx -- "$EXPECTED_NODE_SCRIPT_PATH"
+      return
+    fi
+    [ -n "$EXPECTED_PACKAGE_SPEC" ] || return 1
+    if printf '%s\\n' "$PROCESS_ARGS" | grep -Fqx -- "$EXPECTED_PACKAGE_SPEC"; then
+      return 0
+    fi
+    printf '%s\\n' "$PROCESS_ARGS" | grep -Eq '(^|/)t3$|/node_modules/(\\.bin/t3|t3/dist/bin\\.mjs)$'
+    return
+  fi
+  PROCESS_COMMAND="$(ps -ww -o command= -p "$REMOTE_PID" 2>/dev/null || true)"
+  [ -n "$PROCESS_COMMAND" ] || return 1
+  case "$PROCESS_COMMAND" in
+    *" serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME"*) ;;
+    *) return 1 ;;
+  esac
+  if [ -n "$EXPECTED_NODE_SCRIPT_PATH" ]; then
+    case "$PROCESS_COMMAND" in
+      *"$EXPECTED_NODE_SCRIPT_PATH"*) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+  [ -n "$EXPECTED_PACKAGE_SPEC" ] || return 1
+  case "$PROCESS_COMMAND" in
+    *"$EXPECTED_PACKAGE_SPEC"*|*"/node_modules/t3/dist/bin.mjs"*|*"/node_modules/.bin/t3"*|"t3 serve"*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 resolve_default_runtime_port() {
   node - "$DEFAULT_RUNTIME_FILE" <<'NODE'
@@ -755,6 +783,9 @@ export function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
     T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteT3RunnerScript(input)),
     T3_RUNNER_ID: shellSingleQuote(buildRemoteT3RunnerIdentity(input)),
     T3_EXPECTED_NODE_SCRIPT_PATH: shellSingleQuote(input?.nodeScriptPath?.trim() || ""),
+    T3_EXPECTED_PACKAGE_SPEC: shellSingleQuote(
+      input?.nodeScriptPath?.trim() ? "" : input?.packageSpec?.trim() || "t3@latest",
+    ),
     T3_MANAGED_PROCESS_IDENTITY_SCRIPT: stripTrailingNewlines(
       REMOTE_MANAGED_PROCESS_IDENTITY_SCRIPT,
     ),
