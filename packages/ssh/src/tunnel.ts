@@ -414,6 +414,9 @@ ensure_remote_node_path() {
 export const REMOTE_RUNNER_SCRIPT = `#!/bin/sh
 set -eu
 @@T3_NODE_ENV_SCRIPT@@
+if [ "\${1:-}" = "serve" ]; then
+@@T3_RECORD_RUNNER_PROCESS_IDENTITY_SCRIPT@@
+fi
 ensure_remote_node_path || true
 T3_NODE_SCRIPT_PATH=@@T3_NODE_SCRIPT_PATH@@
 if [ -n "$T3_NODE_SCRIPT_PATH" ]; then
@@ -457,13 +460,13 @@ const REMOTE_MANAGED_PROCESS_IDENTITY_SCRIPT = `managed_process_start() {
   if [ -r "/proc/$PID_TO_IDENTIFY/stat" ]; then
     PROCESS_START="$(sed 's/^.*) //' "/proc/$PID_TO_IDENTIFY/stat" | awk '{print $20}')"
     if [ -n "$PROCESS_START" ]; then
-      printf 'proc:%s\n' "$PROCESS_START"
+      printf 'pid:%s:proc:%s\n' "$PID_TO_IDENTIFY" "$PROCESS_START"
     fi
     return
   fi
   PROCESS_START="$(ps -o lstart= -p "$PID_TO_IDENTIFY" 2>/dev/null | awk '{$1=$1; print}')"
   if [ -n "$PROCESS_START" ]; then
-    printf 'ps:%s\n' "$PROCESS_START"
+    printf 'pid:%s:ps:%s\n' "$PID_TO_IDENTIFY" "$PROCESS_START"
   fi
 }
 managed_pid_is_owned() {
@@ -472,6 +475,16 @@ managed_pid_is_owned() {
     kill -0 "$REMOTE_PID" 2>/dev/null &&
     [ "$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)" = "$REMOTE_PROCESS_START" ]
 }`;
+
+const REMOTE_RECORD_RUNNER_PROCESS_IDENTITY_SCRIPT = `${REMOTE_MANAGED_PROCESS_IDENTITY_SCRIPT}
+REMOTE_PID=$$
+REMOTE_PROCESS_START="$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)"
+if [ -z "$REMOTE_PROCESS_START" ]; then
+  printf 'Remote T3 server process identity could not be recorded safely.\\n' >&2
+  exit 1
+fi
+RUNNER_STATE_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+printf '%s\\n' "$REMOTE_PROCESS_START" >"$RUNNER_STATE_DIR/process-start"`;
 
 export const REMOTE_LAUNCH_SCRIPT = `set -eu
 @@T3_NODE_ENV_SCRIPT@@
@@ -549,19 +562,16 @@ tracked_managed_pid_matches_command() {
   fi
   PROCESS_COMMAND="$(ps -ww -o command= -p "$REMOTE_PID" 2>/dev/null || true)"
   [ -n "$PROCESS_COMMAND" ] || return 1
-  case "$PROCESS_COMMAND" in
-    *" serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME"*) ;;
-    *) return 1 ;;
-  esac
+  EXPECTED_T3_ARGS="serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME"
   if [ -n "$EXPECTED_NODE_SCRIPT_PATH" ]; then
     case "$PROCESS_COMMAND" in
-      *"$EXPECTED_NODE_SCRIPT_PATH"*) return 0 ;;
+      *"$EXPECTED_NODE_SCRIPT_PATH $EXPECTED_T3_ARGS") return 0 ;;
       *) return 1 ;;
     esac
   fi
   [ -n "$EXPECTED_PACKAGE_SPEC" ] || return 1
   case "$PROCESS_COMMAND" in
-    *"$EXPECTED_PACKAGE_SPEC"*|*"/node_modules/t3/dist/bin.mjs"*|*"/node_modules/.bin/t3"*|"t3 serve"*) return 0 ;;
+    *"$EXPECTED_PACKAGE_SPEC $EXPECTED_T3_ARGS"|*"/node_modules/t3/dist/bin.mjs $EXPECTED_T3_ARGS"|*"/node_modules/.bin/t3 $EXPECTED_T3_ARGS"|"t3 $EXPECTED_T3_ARGS") return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -600,7 +610,7 @@ if [ -n "$DEFAULT_RUNTIME_INFO" ]; then
 fi
 DEFAULT_RUNTIME_IS_TRACKED_MANAGED=0
 if [ "$REMOTE_MANAGED" = "managed" ] && [ "$REMOTE_PID" = "$DEFAULT_RUNTIME_PID" ]; then
-  if ! managed_pid_is_owned && tracked_managed_pid_matches_command; then
+  if ! managed_pid_is_owned && [ -z "$REMOTE_PROCESS_START" ] && tracked_managed_pid_matches_command; then
     REMOTE_PROCESS_START="$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)"
     if [ -n "$REMOTE_PROCESS_START" ]; then
       printf '%s\\n' "$REMOTE_PROCESS_START" >"$PROCESS_START_FILE"
@@ -755,6 +765,9 @@ export function buildRemoteT3RunnerScript(input?: RemoteT3RunnerOptions): string
       T3_PACKAGE_SPEC: packageSpec,
       T3_NODE_SCRIPT_PATH: shellSingleQuote(nodeScriptPath),
       T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
+      T3_RECORD_RUNNER_PROCESS_IDENTITY_SCRIPT: stripTrailingNewlines(
+        REMOTE_RECORD_RUNNER_PROCESS_IDENTITY_SCRIPT,
+      ),
     }),
   );
 }

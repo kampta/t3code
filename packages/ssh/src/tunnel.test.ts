@@ -43,12 +43,12 @@ function readProcessStart(pid: number): string {
       .slice(stat.lastIndexOf(") ") + 2)
       .trim()
       .split(/\s+/u);
-    return `proc:${fields[19] ?? ""}`;
+    return `pid:${pid}:proc:${fields[19] ?? ""}`;
   }
   const result = NodeChildProcess.spawnSync("ps", ["-o", "lstart=", "-p", `${pid}`], {
     encoding: "utf8",
   });
-  return `ps:${result.stdout.trim().replace(/\s+/gu, " ")}`;
+  return `pid:${pid}:ps:${result.stdout.trim().replace(/\s+/gu, " ")}`;
 }
 
 const makeSuccessfulProcess = (stdout: string) => {
@@ -349,7 +349,10 @@ describe("ssh tunnel scripts", () => {
         `${buildRemoteT3RunnerScript(runner)}\n`,
       );
 
-      NodeFS.writeFileSync(NodePath.join(stateDir, "process-start"), "stale-process-start\n");
+      NodeFS.writeFileSync(
+        NodePath.join(stateDir, "process-start"),
+        `pid:${server.pid}:ps:stale-process-start\n`,
+      );
       const staleIdentityResult = NodeChildProcess.spawnSync("sh", ["-s", "--", stateKey], {
         encoding: "utf8",
         env: { ...process.env, HOME: home },
