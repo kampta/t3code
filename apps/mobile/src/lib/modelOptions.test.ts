@@ -379,6 +379,8 @@ describe("mobile model options", () => {
           displayName: "Codex",
           enabled: true,
           installed: true,
+          status: "ready",
+          availability: "available",
           auth: { status: "authenticated" },
           models: [
             { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isCustom: false, capabilities: null },
