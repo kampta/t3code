@@ -22,6 +22,7 @@ import {
   buildRemoteLaunchScript,
   buildRemotePairingScript,
   buildRemoteStopScript,
+  buildRemoteT3RunnerIdentity,
   buildRemoteT3RunnerScript,
   describeReadinessCause,
   issueRemotePairingToken,
@@ -180,6 +181,8 @@ describe("ssh tunnel scripts", () => {
       '[ -n "$REMOTE_PID" ] && [ -n "$REMOTE_PORT" ] && kill -0 "$REMOTE_PID" 2>/dev/null',
     );
     assert.include(buildRemoteLaunchScript(), "RUNNER_CHANGED=1");
+    assert.include(buildRemoteLaunchScript(), 'RUNNER_ID_FILE="$STATE_DIR/runner-id"');
+    assert.notInclude(buildRemoteLaunchScript(), 'cmp -s "$RUNNER_NEXT" "$RUNNER_FILE"');
     assert.include(buildRemoteLaunchScript(), "ensure_remote_node_path()");
     assert.include(buildRemoteLaunchScript(), "if ! ensure_remote_node_path; then");
     assert.include(
@@ -243,7 +246,7 @@ describe("ssh tunnel scripts", () => {
     );
   });
 
-  it("reuses a healthy managed runtime when the default runtime file describes the same process", async () => {
+  it("reuses a healthy managed runtime when equivalent runner bytes differ", async () => {
     const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-ssh-managed-runtime-"));
     const home = NodePath.join(root, "home");
     const stateKey = "managed-runtime-regression";
@@ -273,9 +276,10 @@ describe("ssh tunnel scripts", () => {
       NodeFS.writeFileSync(NodePath.join(stateDir, "pid"), `${server.pid}\n`);
       NodeFS.writeFileSync(NodePath.join(stateDir, "port"), `${port}\n`);
       NodeFS.writeFileSync(NodePath.join(stateDir, "managed"), "managed\n");
+      NodeFS.writeFileSync(NodePath.join(stateDir, "run-t3.sh"), "previously bundled formatting\n");
       NodeFS.writeFileSync(
-        NodePath.join(stateDir, "run-t3.sh"),
-        `${buildRemoteT3RunnerScript(runner)}\n`,
+        NodePath.join(stateDir, "runner-id"),
+        `${buildRemoteT3RunnerIdentity(runner)}\n`,
       );
       NodeFS.writeFileSync(
         NodePath.join(userdataDir, "server-runtime.json"),
@@ -306,6 +310,10 @@ describe("ssh tunnel scripts", () => {
       assert.equal(
         NodeFS.readFileSync(NodePath.join(stateDir, "managed"), "utf8").trim(),
         "managed",
+      );
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(stateDir, "run-t3.sh"), "utf8"),
+        `${buildRemoteT3RunnerScript(runner)}\n`,
       );
     } finally {
       if (server.exitCode === null) {

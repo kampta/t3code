@@ -463,6 +463,8 @@ PID_FILE="$STATE_DIR/pid"
 MANAGED_FILE="$STATE_DIR/managed"
 LOG_FILE="$STATE_DIR/server.log"
 RUNNER_FILE="$STATE_DIR/run-t3.sh"
+RUNNER_ID_FILE="$STATE_DIR/runner-id"
+RUNNER_ID=@@T3_RUNNER_ID@@
 RUNNER_NEXT="$STATE_DIR/run-t3.next.$$"
 mkdir -p "$STATE_DIR"
 cleanup_runner_next() {
@@ -473,11 +475,12 @@ cat >"$RUNNER_NEXT" <<'SH'
 @@T3_RUNNER_SCRIPT@@
 SH
 RUNNER_CHANGED=0
-if [ ! -f "$RUNNER_FILE" ] || ! cmp -s "$RUNNER_NEXT" "$RUNNER_FILE"; then
+if [ ! -f "$RUNNER_ID_FILE" ] || [ "$(cat "$RUNNER_ID_FILE" 2>/dev/null || true)" != "$RUNNER_ID" ]; then
   RUNNER_CHANGED=1
 fi
 mv "$RUNNER_NEXT" "$RUNNER_FILE"
 chmod 700 "$RUNNER_FILE"
+printf '%s\n' "$RUNNER_ID" >"$RUNNER_ID_FILE"
 if ! ensure_remote_node_path; then
   printf 'Remote host is missing node on PATH. Install Node or configure a supported version manager for non-interactive shells.\\n' >&2
   exit 1
@@ -667,6 +670,15 @@ export function buildRemoteT3RunnerScript(input?: RemoteT3RunnerOptions): string
   );
 }
 
+export function buildRemoteT3RunnerIdentity(input?: RemoteT3RunnerOptions): string {
+  const nodeScriptPath = input?.nodeScriptPath?.trim() || "";
+  return JSON.stringify({
+    kind: nodeScriptPath ? "node-script" : "package",
+    source: nodeScriptPath || input?.packageSpec?.trim() || "t3@latest",
+    nodeEngineRange: input?.nodeEngineRange?.trim() || "",
+  });
+}
+
 export function buildRemoteNodeEnvScript(input?: RemoteT3RunnerOptions): string {
   return stripTrailingNewlines(
     applyScriptPlaceholders(REMOTE_NODE_ENV_SCRIPT, {
@@ -680,6 +692,7 @@ export function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
   return applyScriptPlaceholders(REMOTE_LAUNCH_SCRIPT, {
     T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
     T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteT3RunnerScript(input)),
+    T3_RUNNER_ID: shellSingleQuote(buildRemoteT3RunnerIdentity(input)),
     T3_PICK_PORT_SCRIPT: stripTrailingNewlines(REMOTE_PICK_PORT_SCRIPT),
     T3_WAIT_READY_SCRIPT: stripTrailingNewlines(REMOTE_WAIT_READY_SCRIPT),
     T3_DEFAULT_REMOTE_PORT: String(DEFAULT_REMOTE_PORT),
