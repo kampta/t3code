@@ -452,6 +452,27 @@ printf 'Remote host is missing the t3 CLI and could not install @@T3_PACKAGE_SPE
 exit 1
 `;
 
+const REMOTE_MANAGED_PROCESS_IDENTITY_SCRIPT = `managed_process_start() {
+  PID_TO_IDENTIFY="$1"
+  if [ -r "/proc/$PID_TO_IDENTIFY/stat" ]; then
+    PROCESS_START="$(sed 's/^.*) //' "/proc/$PID_TO_IDENTIFY/stat" | awk '{print $20}')"
+    if [ -n "$PROCESS_START" ]; then
+      printf 'proc:%s\n' "$PROCESS_START"
+    fi
+    return
+  fi
+  PROCESS_START="$(ps -o lstart= -p "$PID_TO_IDENTIFY" 2>/dev/null | awk '{$1=$1; print}')"
+  if [ -n "$PROCESS_START" ]; then
+    printf 'ps:%s\n' "$PROCESS_START"
+  fi
+}
+managed_pid_is_owned() {
+  [ -n "\${REMOTE_PID:-}" ] &&
+    [ -n "\${REMOTE_PROCESS_START:-}" ] &&
+    kill -0 "$REMOTE_PID" 2>/dev/null &&
+    [ "$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)" = "$REMOTE_PROCESS_START" ]
+}`;
+
 export const REMOTE_LAUNCH_SCRIPT = `set -eu
 @@T3_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
@@ -505,26 +526,7 @@ wait_for_pid_exit() {
     sleep 0.1
   done
 }
-managed_process_start() {
-  PID_TO_IDENTIFY="$1"
-  if [ -r "/proc/$PID_TO_IDENTIFY/stat" ]; then
-    PROCESS_START="$(sed 's/^.*) //' "/proc/$PID_TO_IDENTIFY/stat" | awk '{print $20}')"
-    if [ -n "$PROCESS_START" ]; then
-      printf 'proc:%s\n' "$PROCESS_START"
-    fi
-    return
-  fi
-  PROCESS_START="$(ps -o lstart= -p "$PID_TO_IDENTIFY" 2>/dev/null | awk '{$1=$1; print}')"
-  if [ -n "$PROCESS_START" ]; then
-    printf 'ps:%s\n' "$PROCESS_START"
-  fi
-}
-managed_pid_is_owned() {
-  [ -n "\${REMOTE_PID:-}" ] &&
-    [ -n "\${REMOTE_PROCESS_START:-}" ] &&
-    kill -0 "$REMOTE_PID" 2>/dev/null &&
-    [ "$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)" = "$REMOTE_PROCESS_START" ]
-}
+@@T3_MANAGED_PROCESS_IDENTITY_SCRIPT@@
 tracked_managed_pid_matches_command() {
   [ -n "$REMOTE_PID" ] &&
     [ -n "$REMOTE_PORT" ] &&
@@ -696,26 +698,7 @@ PROCESS_START_FILE="$STATE_DIR/process-start"
 REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
 REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
 REMOTE_PROCESS_START="$(cat "$PROCESS_START_FILE" 2>/dev/null || true)"
-managed_process_start() {
-  PID_TO_IDENTIFY="$1"
-  if [ -r "/proc/$PID_TO_IDENTIFY/stat" ]; then
-    PROCESS_START="$(sed 's/^.*) //' "/proc/$PID_TO_IDENTIFY/stat" | awk '{print $20}')"
-    if [ -n "$PROCESS_START" ]; then
-      printf 'proc:%s\n' "$PROCESS_START"
-    fi
-    return
-  fi
-  PROCESS_START="$(ps -o lstart= -p "$PID_TO_IDENTIFY" 2>/dev/null | awk '{$1=$1; print}')"
-  if [ -n "$PROCESS_START" ]; then
-    printf 'ps:%s\n' "$PROCESS_START"
-  fi
-}
-managed_pid_is_owned() {
-  [ -n "$REMOTE_PID" ] &&
-    [ -n "$REMOTE_PROCESS_START" ] &&
-    kill -0 "$REMOTE_PID" 2>/dev/null &&
-    [ "$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)" = "$REMOTE_PROCESS_START" ]
-}
+@@T3_MANAGED_PROCESS_IDENTITY_SCRIPT@@
 if [ "$REMOTE_MANAGED" != "external" ] && managed_pid_is_owned; then
   kill "$REMOTE_PID" 2>/dev/null || true
   WAIT_COUNT=0
@@ -772,6 +755,9 @@ export function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
     T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteT3RunnerScript(input)),
     T3_RUNNER_ID: shellSingleQuote(buildRemoteT3RunnerIdentity(input)),
     T3_EXPECTED_NODE_SCRIPT_PATH: shellSingleQuote(input?.nodeScriptPath?.trim() || ""),
+    T3_MANAGED_PROCESS_IDENTITY_SCRIPT: stripTrailingNewlines(
+      REMOTE_MANAGED_PROCESS_IDENTITY_SCRIPT,
+    ),
     T3_PICK_PORT_SCRIPT: stripTrailingNewlines(REMOTE_PICK_PORT_SCRIPT),
     T3_WAIT_READY_SCRIPT: stripTrailingNewlines(REMOTE_WAIT_READY_SCRIPT),
     T3_DEFAULT_REMOTE_PORT: String(DEFAULT_REMOTE_PORT),
@@ -795,6 +781,9 @@ export function buildRemotePairingScript(
 export function buildRemoteStopScript(target: DesktopSshEnvironmentTarget): string {
   return applyScriptPlaceholders(REMOTE_STOP_SCRIPT, {
     T3_STATE_KEY: remoteStateKey(target),
+    T3_MANAGED_PROCESS_IDENTITY_SCRIPT: stripTrailingNewlines(
+      REMOTE_MANAGED_PROCESS_IDENTITY_SCRIPT,
+    ),
   });
 }
 
