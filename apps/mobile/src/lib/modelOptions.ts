@@ -88,11 +88,11 @@ export function resolveSelectableModelSelection(
 }
 
 /**
- * Like resolveSelectableModelSelection, but additionally rejects legacy
- * models. Used for implicit defaults (stored draft, project last-used): a
- * new thread should never quietly start on a legacy model, so those fall
- * through to the provider's default instead. Explicit picks in the settings
- * sheet are unaffected.
+ * Like resolveSelectableModelSelection, but additionally requires a ready,
+ * available provider and rejects legacy models. Used for implicit defaults
+ * (project last-used and app-wide sticky selection): a new thread should never
+ * quietly start on an unhealthy provider or legacy model. Explicit picks in
+ * the settings sheet are unaffected.
  */
 export function resolveDefaultableModelSelection(
   config: T3ServerConfig | null | undefined,
@@ -104,7 +104,26 @@ export function resolveDefaultableModelSelection(
   }
   const provider = config.providers.find((candidate) => candidate.instanceId === usable.instanceId);
   const model = provider?.models.find((candidate) => candidate.slug === usable.model);
-  return model?.isLegacy === true ? null : usable;
+  return provider?.status === "ready" &&
+    provider.availability !== "unavailable" &&
+    model?.isLegacy !== true
+    ? usable
+    : null;
+}
+
+export function resolveNewTaskModelSelection(input: {
+  readonly draftSelection: ModelSelection | null;
+  readonly projectDefaultSelection: ModelSelection | null;
+  readonly stickySelection: ModelSelection | null;
+  readonly modelOptions: ReadonlyArray<ModelOption>;
+}): ModelSelection | null {
+  return (
+    input.draftSelection ??
+    input.projectDefaultSelection ??
+    input.stickySelection ??
+    resolveDefaultModelSelection(input.modelOptions) ??
+    null
+  );
 }
 
 export function buildModelOptions(
@@ -124,7 +143,7 @@ export function buildModelOptions(
       options.set(key, {
         key,
         label: model.name,
-        subtitle: providerLabel,
+        subtitle: model.subProvider ?? "",
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
@@ -156,7 +175,7 @@ export function buildModelOptions(
       options.set(key, {
         key,
         label: fallbackModelSelection.model,
-        subtitle: providerLabel,
+        subtitle: "",
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,
         providerDriver: fallbackModelSelection.instanceId,
