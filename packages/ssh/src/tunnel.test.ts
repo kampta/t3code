@@ -183,6 +183,8 @@ describe("ssh tunnel scripts", () => {
       "T3_NODE_SCRIPT_PATH='/Users/julius/Development/Work/codething-mvp/apps/server/dist/bin.mjs'",
     );
     assert.include(script, 'exec node "$T3_NODE_SCRIPT_PATH" "$@"');
+    assert.include(script, "REMOTE_PID=$$");
+    assert.notInclude(script, "REMOTE_PID=$\n");
   });
 
   it("uses the remote t3 runner for launch and pairing scripts", () => {
