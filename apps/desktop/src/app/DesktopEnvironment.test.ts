@@ -51,6 +51,7 @@ describe("DesktopEnvironment", () => {
       );
 
       assert.equal(environment.isDevelopment, true);
+      assert.equal(environment.isDevelopmentBuild, true);
       assert.equal(environment.appDataDirectory, "/Users/alice/Library/Application Support");
       assert.equal(environment.baseDir, "/tmp/t3");
       assert.equal(environment.stateDir, "/tmp/t3/userdata");
@@ -92,6 +93,7 @@ describe("DesktopEnvironment", () => {
       );
 
       assert.equal(environment.isDevelopment, false);
+      assert.equal(environment.isDevelopmentBuild, false);
       assert.equal(environment.stateDir, "/tmp/t3/userdata");
       assert.equal(environment.logDir, "/tmp/t3/userdata/logs");
       assert.equal(environment.browserArtifactsDir, "/tmp/t3/userdata/browser-artifacts");
@@ -127,6 +129,23 @@ describe("DesktopEnvironment", () => {
 
       assert.equal(development.stateDir, "/Users/alice/.t3/dev");
       assert.equal(production.stateDir, "/Users/alice/.t3/userdata");
+    }),
+  );
+
+  it.effect("gives packaged dev builds a separate identity without requiring Vite", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({
+        appVersion: "0.0.22-dev.local",
+        isPackaged: true,
+      });
+
+      assert.equal(environment.isDevelopment, false);
+      assert.equal(environment.isDevelopmentBuild, true);
+      assert.equal(environment.displayName, "T3 Code (Dev)");
+      assert.equal(environment.stateDir, "/Users/alice/.t3/dev");
+      assert.equal(environment.userDataDirName, "t3code-dev");
+      assert.equal(environment.appUserModelId, "com.t3tools.t3code.dev");
+      assert.deepEqual(environment.devServerUrl, Option.none());
     }),
   );
 

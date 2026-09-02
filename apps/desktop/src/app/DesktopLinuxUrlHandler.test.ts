@@ -22,6 +22,7 @@ const makeEnvironment = (overrides: Record<string, unknown> = {}) =>
     platform: "linux",
     isPackaged: true,
     isDevelopment: false,
+    isDevelopmentBuild: false,
     displayName: "T3 Code (Alpha)",
     linuxWmClass: "t3code",
     linuxApplicationsDir: "/home/alice/.local/share/applications",
@@ -172,6 +173,32 @@ describe("DesktopLinuxUrlHandler", () => {
         {
           command: "xdg-mime",
           args: ["default", "t3code-url-handler.desktop", "x-scheme-handler/t3code"],
+        },
+      ]);
+    });
+  });
+
+  it.effect("keeps the packaged development handler separate from production", () => {
+    const recorded = emptyRecording();
+
+    return Effect.gen(function* () {
+      yield* runRegister(recorded, {
+        environment: {
+          isDevelopmentBuild: true,
+          displayName: "T3 Code (Dev)",
+          appImagePath: Option.some("/home/alice/Applications/T3-Code-Dev.AppImage"),
+        },
+      });
+
+      assert.equal(
+        recorded.files[0]?.path,
+        "/home/alice/.local/share/applications/t3code-dev-url-handler.desktop",
+      );
+      assert.include(recorded.files[0]?.content, "MimeType=x-scheme-handler/t3code-dev;");
+      assert.deepEqual(recorded.commands, [
+        {
+          command: "xdg-mime",
+          args: ["default", "t3code-dev-url-handler.desktop", "x-scheme-handler/t3code-dev"],
         },
       ]);
     });
