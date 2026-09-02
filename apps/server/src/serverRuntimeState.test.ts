@@ -183,4 +183,74 @@ describe("serverRuntimeState", () => {
       }
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("only clears a runtime descriptor owned by the releasing server", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-runtime-owned-clear-",
+      });
+      const statePath = path.join(root, "server-runtime.json");
+      yield* ServerRuntimeState.persistServerRuntimeState({
+        path: statePath,
+        state: {
+          version: 1,
+          pid: 456,
+          port: 4_972,
+          origin: "http://127.0.0.1:4972",
+          ownerToken: "new-server-token",
+          startedAt: "2026-06-20T00:01:00.000Z",
+        },
+      });
+
+      const staleClear = yield* ServerRuntimeState.clearPersistedServerRuntimeStateIfOwned({
+        path: statePath,
+        ownerToken: "old-server-token",
+      });
+      assert.isFalse(staleClear);
+      assert.isTrue(
+        Option.isSome(yield* ServerRuntimeState.readPersistedServerRuntimeState(statePath)),
+      );
+
+      const ownerClear = yield* ServerRuntimeState.clearPersistedServerRuntimeStateIfOwned({
+        path: statePath,
+        ownerToken: "new-server-token",
+      });
+      assert.isTrue(ownerClear);
+      assert.isTrue(
+        Option.isNone(yield* ServerRuntimeState.readPersistedServerRuntimeState(statePath)),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not claim ownership of a legacy runtime descriptor", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-runtime-legacy-clear-",
+      });
+      const statePath = path.join(root, "server-runtime.json");
+      yield* ServerRuntimeState.persistServerRuntimeState({
+        path: statePath,
+        state: {
+          version: 1,
+          pid: 123,
+          port: 4_971,
+          origin: "http://127.0.0.1:4971",
+          startedAt: "2026-06-20T00:00:00.000Z",
+        },
+      });
+
+      const cleared = yield* ServerRuntimeState.clearPersistedServerRuntimeStateIfOwned({
+        path: statePath,
+        ownerToken: "new-server-token",
+      });
+      assert.isFalse(cleared);
+      assert.isTrue(
+        Option.isSome(yield* ServerRuntimeState.readPersistedServerRuntimeState(statePath)),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
