@@ -89,9 +89,9 @@ const resolveDesktopSshCliRunner = (
   settings: DesktopAppSettings.DesktopSettings,
 ): RemoteT3RunnerOptions => {
   const devRemoteEntryPath = Option.getOrUndefined(environment.devRemoteT3ServerEntryPath);
-  if (environment.isDevelopment && devRemoteEntryPath !== undefined) {
+  if (environment.isDevelopmentBuild) {
     return {
-      nodeScriptPath: devRemoteEntryPath,
+      nodeScriptPath: devRemoteEntryPath ?? "/home/kampta/code/t3code/apps/server/dist/bin.mjs",
       nodeEngineRange: serverPackageJson.engines.node,
     };
   }
@@ -99,7 +99,7 @@ const resolveDesktopSshCliRunner = (
     packageSpec: resolveRemoteT3CliPackageSpec({
       appVersion: environment.appVersion,
       updateChannel: settings.updateChannel,
-      isDevelopment: environment.isDevelopment,
+      isDevelopment: environment.isDevelopmentBuild,
     }),
     nodeEngineRange: serverPackageJson.engines.node,
   };
