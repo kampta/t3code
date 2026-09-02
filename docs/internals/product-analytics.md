@@ -1,9 +1,10 @@
 # Product analytics
 
-T3 Code sends anonymous product events from the server to PostHog. The server
+T3 Code can send anonymous product events from the server to PostHog when
+`T3CODE_TELEMETRY_ENABLED=true`. Telemetry is disabled by default. The server
 uses the first available hashed Codex account ID, hashed Claude user ID, or
 installation-scoped anonymous ID as the distinct ID. It also keeps the
-telemetry opt-out, event buffer, and batch delivery. Clients do not load the
+telemetry opt-in, event buffer, and batch delivery. Clients do not load the
 PostHog browser SDK.
 
 ## Client events
