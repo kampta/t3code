@@ -1,10 +1,12 @@
-import type {
-  ModelCapabilities,
-  ModelSelection,
-  ServerConfig as T3ServerConfig,
+import {
+  defaultInstanceIdForDriver,
+  type ModelCapabilities,
+  type ModelSelection,
+  type ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
+  DEFAULT_PROVIDER_DRIVER_KIND,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 
@@ -15,6 +17,7 @@ export type ModelOption = {
   readonly providerKey: string;
   readonly providerLabel: string;
   readonly providerDriver: string;
+  readonly isProviderReady: boolean;
   readonly isDefault: boolean;
   readonly isLegacy: boolean;
   readonly capabilities: ModelCapabilities | null;
@@ -115,9 +118,7 @@ export function resolveNewTaskModelSelection(input: {
     input.draftSelection ??
     input.projectDefaultSelection ??
     input.stickySelection ??
-    input.modelOptions.find((option) => option.isDefault)?.selection ??
-    input.modelOptions[0]?.selection ??
-    null
+    resolveDefaultModelSelection(input.modelOptions)
   );
 }
 
@@ -142,6 +143,7 @@ export function buildModelOptions(
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
+        isProviderReady: provider.status === "ready" && provider.availability !== "unavailable",
         isDefault: model.isDefault === true,
         isLegacy: model.isLegacy === true,
         capabilities: model.capabilities,
@@ -173,6 +175,7 @@ export function buildModelOptions(
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,
         providerDriver: fallbackModelSelection.instanceId,
+        isProviderReady: true,
         isDefault: false,
         isLegacy: false,
         capabilities: null,
@@ -182,6 +185,44 @@ export function buildModelOptions(
   }
 
   return [...options.values()];
+}
+
+export function resolveDefaultModelSelection(
+  options: ReadonlyArray<ModelOption>,
+): ModelSelection | null {
+  const preferredDefaultInstanceId = defaultInstanceIdForDriver(DEFAULT_PROVIDER_DRIVER_KIND);
+  const findPreferred = () =>
+    options.find(
+      (option) =>
+        option.isProviderReady &&
+        option.providerKey === preferredDefaultInstanceId &&
+        option.isDefault &&
+        !option.isLegacy,
+    )?.selection ??
+    options.find(
+      (option) =>
+        option.isProviderReady &&
+        option.providerKey === preferredDefaultInstanceId &&
+        !option.isLegacy,
+    )?.selection ??
+    options.find(
+      (option) =>
+        option.isProviderReady &&
+        option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND &&
+        option.isDefault &&
+        !option.isLegacy,
+    )?.selection ??
+    options.find(
+      (option) =>
+        option.isProviderReady &&
+        option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND &&
+        !option.isLegacy,
+    )?.selection ??
+    options.find((option) => option.isProviderReady && option.isDefault && !option.isLegacy)
+      ?.selection ??
+    options.find((option) => option.isProviderReady && !option.isLegacy)?.selection;
+
+  return findPreferred() ?? null;
 }
 
 export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyArray<ProviderGroup> {

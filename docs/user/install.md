@@ -95,6 +95,9 @@ to use, then authenticate it.
 Codex and Claude are on by default. Cursor, Grok Build, and OpenCode are off by default; turn
 them on in **Settings** → the provider's card when you want to use them.
 
+When a new session has no existing or explicit provider selection, T3 Code prefers a ready Codex
+provider and model. It falls back to another ready provider when Codex is unavailable.
+
 Cursor is the one to watch: install Cursor CLI, which provides the `cursor-agent` binary that
 T3 Code looks for, but authenticate with `agent login`, not `cursor-agent login`.
 

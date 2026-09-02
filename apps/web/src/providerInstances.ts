@@ -25,6 +25,7 @@ import {
   type ServerSettings,
   type ServerProviderState,
 } from "@t3tools/contracts";
+import { DEFAULT_PROVIDER_DRIVER_KIND } from "@t3tools/shared/model";
 
 import { formatProviderDriverKindLabel } from "./providerModels";
 
@@ -323,12 +324,26 @@ export function getDefaultProviderInstanceModel(
 const isSelectableProviderInstanceEntry = (entry: ProviderInstanceEntry): boolean =>
   entry.enabled && entry.isAvailable;
 
+const preferredDefaultInstanceId = defaultInstanceIdForDriver(DEFAULT_PROVIDER_DRIVER_KIND);
+
+function findPreferredProviderInstanceEntry(
+  entries: ReadonlyArray<ProviderInstanceEntry>,
+  predicate: (entry: ProviderInstanceEntry) => boolean,
+): ProviderInstanceEntry | undefined {
+  return (
+    entries.find((entry) => entry.instanceId === preferredDefaultInstanceId && predicate(entry)) ??
+    entries.find(
+      (entry) => entry.driverKind === DEFAULT_PROVIDER_DRIVER_KIND && predicate(entry),
+    ) ??
+    entries.find(predicate)
+  );
+}
+
 /**
  * Resolve an exact stored instance when it remains enabled and available.
- * Otherwise choose a deterministic fallback that can plausibly start now:
- * ready first, then a non-error probe result. An errored provider is retained
- * only when it was explicitly requested; it is never invented as a new-user
- * default.
+ * Otherwise choose a deterministic ready fallback. Warning and errored
+ * providers are retained only when explicitly requested; neither is invented
+ * as a new-user default.
  */
 export function resolveSelectableProviderInstanceEntry(
   entries: ReadonlyArray<ProviderInstanceEntry>,
@@ -340,17 +355,14 @@ export function resolveSelectableProviderInstanceEntry(
       return requested;
     }
   }
-  return (
-    entries.find(isProviderInstancePickerReady) ??
-    entries.find((entry) => isSelectableProviderInstanceEntry(entry) && entry.status !== "error")
-  );
+  return findPreferredProviderInstanceEntry(entries, isProviderInstancePickerReady);
 }
 
 /**
  * Resolve the routing key for a selection that may reference an instance
  * id that no longer exists (e.g. a persisted thread selection after the
- * user deleted the custom instance). Returns a ready or non-error fallback,
- * or `undefined` when no provider can safely become a new selection.
+ * user deleted the custom instance). Returns a ready fallback, or `undefined`
+ * when no provider can safely become a new selection.
  */
 export function resolveSelectableProviderInstance(
   providers: ReadonlyArray<ServerProvider>,

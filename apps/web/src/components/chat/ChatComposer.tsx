@@ -1010,7 +1010,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       providerStatuses,
       explicitSelectedInstanceId,
     ) ??
-    providerInstanceEntries[0]?.driverKind ??
+    resolveSelectableProviderInstanceEntry(providerInstanceEntries, undefined)?.driverKind ??
     ProviderDriverKind.make("unconfigured");
   const requestedDriverKind: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
   const lockedContinuationGroupKey = useMemo((): string | null => {
