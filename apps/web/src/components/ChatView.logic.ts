@@ -567,7 +567,7 @@ export function resolveComposerProviderSelection(input: {
   const requestedDriverKind =
     input.lockedProvider ??
     input.entries.find((entry) => entry.instanceId === requestedInstanceId)?.driverKind ??
-    input.entries[0]?.driverKind ??
+    resolveSelectableProviderInstanceEntry(input.entries, undefined)?.driverKind ??
     ProviderDriverKind.make("unconfigured");
   const lockedContinuationGroupKey = input.lockedProvider
     ? (input.entries.find((entry) => entry.instanceId === input.lockedInstanceId)
