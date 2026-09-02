@@ -278,6 +278,15 @@ describe("resolveSelectableProviderInstance", () => {
     expect(resolveSelectableProviderInstance(providers, disabled)).toBe(fallback);
   });
 
+  it("does not treat a non-Codex driver in the default Codex slot as preferred", () => {
+    const providers = [
+      provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "codex" }),
+      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex_work" }),
+    ];
+
+    expect(resolveSelectableProviderInstance(providers, undefined)).toBe("codex_work");
+  });
+
   it("prefers a ready instance over an enabled one whose driver cannot start", () => {
     const notInstalled = ProviderInstanceId.make("codex");
     const ready = ProviderInstanceId.make("claudeAgent");
@@ -293,7 +302,7 @@ describe("resolveSelectableProviderInstance", () => {
     expect(resolveSelectableProviderInstance(providers, undefined)).toBe(ready);
   });
 
-  it("prefers an unprobed (warning) instance over one whose probe errored", () => {
+  it("does not invent a warning instance as a new-user default", () => {
     const notInstalled = ProviderInstanceId.make("codex");
     const unprobed = ProviderInstanceId.make("claudeAgent");
     const providers = [
@@ -309,7 +318,7 @@ describe("resolveSelectableProviderInstance", () => {
       }),
     ];
 
-    expect(resolveSelectableProviderInstance(providers, undefined)).toBe(unprobed);
+    expect(resolveSelectableProviderInstance(providers, undefined)).toBeUndefined();
   });
 
   it("keeps a requested instance even when its probe errored", () => {
@@ -455,6 +464,46 @@ describe("getDefaultProviderInstanceModel", () => {
 });
 
 describe("resolveDefaultProviderModelSelection", () => {
+  it("prefers Codex when multiple ready providers are available", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: "claudeAgent",
+        models: [model("claude-fable-5", false, true)],
+      }),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: [model("gpt-5.6", false, true)],
+      }),
+    ];
+
+    expect(resolveDefaultProviderModelSelection(providers, null)).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6",
+    });
+  });
+
+  it("prefers the built-in Codex instance over a custom Codex instance", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex_work",
+        models: [model("gpt-work", false, true)],
+      }),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: [model("gpt-default", false, true)],
+      }),
+    ];
+
+    expect(resolveDefaultProviderModelSelection(providers, null)).toEqual({
+      instanceId: "codex",
+      model: "gpt-default",
+    });
+  });
+
   it.each([
     ["codex", "codex", "gpt-5.6"],
     ["claudeAgent", "claudeAgent", "claude-fable-5"],

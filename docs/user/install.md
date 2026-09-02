@@ -93,6 +93,9 @@ instance can have its own environment variables, such as API keys or a custom
 base URL. Mark secret values as sensitive; after saving, T3 Code does not display
 their original values.
 
+When a new session has no existing or explicit provider selection, T3 Code prefers a ready Codex
+provider and model. It falls back to another ready provider when Codex is unavailable.
+
 For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 [Claude](./providers-claude.md), [OpenCode](./providers-opencode.md), and
 [Antigravity](./providers-antigravity.md).
