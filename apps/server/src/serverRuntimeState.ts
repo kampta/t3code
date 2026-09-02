@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Server ownership needs a synchronous OS process-incarnation probe before startup can proceed.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -17,6 +21,10 @@ export const PersistedServerRuntimeState = Schema.Struct({
   // Present when the server fronts a dev web server (VITE_DEV_SERVER_URL).
   // Dev is single-origin: browsers must pair through this URL, not `origin`.
   devUrl: Schema.optional(Schema.String),
+  // Identifies the server process that wrote this descriptor. Older runtime
+  // files omit it; those files remain readable but are never removed by an
+  // ownership-checked shutdown.
+  ownerToken: Schema.optional(Schema.String),
   startedAt: Schema.String,
 });
 export type PersistedServerRuntimeState = typeof PersistedServerRuntimeState.Type;
@@ -50,6 +58,7 @@ const runtimeOriginForConfig = (
 export const makePersistedServerRuntimeState = (input: {
   readonly config: Pick<ServerConfig.ServerConfig["Service"], "host" | "devUrl">;
   readonly port: number;
+  readonly ownerToken?: string;
 }): Effect.Effect<PersistedServerRuntimeState> =>
   Effect.map(DateTime.now, (now) => ({
     version: 1,
@@ -58,6 +67,7 @@ export const makePersistedServerRuntimeState = (input: {
     port: input.port,
     origin: runtimeOriginForConfig(input.config, input.port),
     ...(input.config.devUrl ? { devUrl: input.config.devUrl.toString() } : {}),
+    ...(input.ownerToken ? { ownerToken: input.ownerToken } : {}),
     startedAt: DateTime.formatIso(now),
   }));
 
@@ -118,6 +128,69 @@ export const isProcessAlive = (pid: number): boolean => {
     return error instanceof Error && "code" in error && error.code === "EPERM";
   }
 };
+
+/**
+ * Return an operating-system identity for one incarnation of a process. Unlike
+ * a pid, this value changes when the operating system reuses a process slot.
+ * Unsupported platforms and restricted process tables deliberately return
+ * undefined so callers can conservatively fall back to pid-only liveness.
+ */
+export const getProcessStartIdentity = (
+  pid: number,
+  platform: NodeJS.Platform,
+): string | undefined => {
+  try {
+    if (platform === "linux") {
+      const stat = NodeFS.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const commandEnd = stat.lastIndexOf(")");
+      if (commandEnd < 0) {
+        return undefined;
+      }
+      // Fields after the command start at field 3 (state); starttime is field
+      // 22, hence index 19. Include the boot id because starttime is measured
+      // from boot and may repeat after a restart.
+      const startTicks = stat
+        .slice(commandEnd + 1)
+        .trim()
+        .split(/\s+/)[19];
+      if (!startTicks) {
+        return undefined;
+      }
+      const bootId = NodeFS.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+      return bootId.length > 0 ? `linux:${bootId}:${startTicks}` : undefined;
+    }
+
+    if (platform === "darwin") {
+      const startedAt = NodeChildProcess.execFileSync(
+        "/bin/ps",
+        ["-o", "lstart=", "-p", String(pid)],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: 1_000,
+        },
+      ).trim();
+      return startedAt.length > 0 ? `darwin:${startedAt.replace(/\s+/g, " ")}` : undefined;
+    }
+  } catch {
+    // A process may exit between the liveness and identity checks. Permission
+    // restrictions also differ by platform, so absence is an expected result.
+  }
+  return undefined;
+};
+
+export const clearPersistedServerRuntimeStateIfOwned = (input: {
+  readonly path: string;
+  readonly ownerToken: string;
+}) =>
+  Effect.gen(function* () {
+    const state = yield* readPersistedServerRuntimeState(input.path);
+    if (Option.isNone(state) || state.value.ownerToken !== input.ownerToken) {
+      return false;
+    }
+    yield* clearPersistedServerRuntimeState(input.path);
+    return true;
+  });
 
 export const readPersistedServerRuntimeState = (path: string) =>
   Effect.gen(function* () {
