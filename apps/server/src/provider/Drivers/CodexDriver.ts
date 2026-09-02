@@ -51,6 +51,8 @@ import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makePackageManagedProviderMaintenanceResolver,
+  normalizeCommandPath,
+  type ProviderMaintenanceCapabilitiesResolver,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
 import {
@@ -66,12 +68,73 @@ import {
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
-const UPDATE = makePackageManagedProviderMaintenanceResolver({
+
+function isCodexStandaloneCommandPath(commandPath: string): boolean {
+  return normalizeCommandPath(commandPath).includes("/.codex/packages/standalone/");
+}
+
+function isCodexStandaloneReleaseCommandPath(commandPath: string): boolean {
+  return normalizeCommandPath(commandPath).includes("/.codex/packages/standalone/releases/");
+}
+
+function quotePosixCommandArgument(argument: string): string {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/u.test(argument)
+    ? argument
+    : `'${argument.replaceAll("'", "'\\''")}'`;
+}
+
+function formatStandaloneUpdateCommand(
+  executable: string,
+  args: ReadonlyArray<string>,
+  platform: NodeJS.Platform | undefined,
+): string {
+  if (platform === "win32") {
+    const script = [
+      `& '${executable.replaceAll("'", "''")}'`,
+      ...args.map((arg) =>
+        /^[A-Za-z0-9_.:@%+=,-]+$/u.test(arg) ? arg : `'${arg.replaceAll("'", "''")}'`,
+      ),
+    ].join(" ");
+    const encodedScript = Buffer.from(script, "utf16le").toString("base64");
+    return `powershell.exe -NoProfile -EncodedCommand ${encodedScript}`;
+  }
+  return [quotePosixCommandArgument(executable), ...args.map(quotePosixCommandArgument)].join(" ");
+}
+
+const CODEX_PACKAGE_MAINTENANCE = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER_KIND,
   npmPackageName: "@openai/codex",
   homebrewFormula: "codex",
-  nativeUpdate: null,
+  nativeUpdate: {
+    executable: "codex",
+    args: ["update"],
+    lockKey: "codex-native",
+    isCommandPath: isCodexStandaloneCommandPath,
+  },
 });
+
+export const CODEX_PROVIDER_MAINTENANCE: ProviderMaintenanceCapabilitiesResolver = {
+  resolve: (options) => {
+    const capabilities = CODEX_PACKAGE_MAINTENANCE.resolve(options);
+    const update = capabilities.update;
+    if (update?.lockKey !== "codex-native" || !options?.resolvedCommandPath) {
+      return capabilities;
+    }
+
+    const executable = options.resolvedCommandPath;
+    if (isCodexStandaloneReleaseCommandPath(executable)) {
+      return { ...capabilities, update: null };
+    }
+    return {
+      ...capabilities,
+      update: {
+        ...update,
+        command: formatStandaloneUpdateCommand(executable, update.args, options.platform),
+        executable,
+      },
+    };
+  },
+};
 
 /**
  * Services the driver needs to materialize an instance. Surfaced as the
@@ -131,10 +194,13 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         enabled,
         homePath: homeLayout.effectiveHomePath ?? "",
       } satisfies CodexSettings;
-      const maintenanceCapabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-        binaryPath: effectiveConfig.binaryPath,
-        env: processEnv,
-      });
+      const maintenanceCapabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(
+        CODEX_PROVIDER_MAINTENANCE,
+        {
+          binaryPath: effectiveConfig.binaryPath,
+          env: processEnv,
+        },
+      );
 
       // `makeCodexAdapter` and `makeCodexTextGeneration` have `never` error
       // channels at construction time — their failure modes are all on the

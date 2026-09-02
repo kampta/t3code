@@ -3,6 +3,7 @@ import {
   type ServerProvider,
   type ServerProviderVersionAdvisory,
 } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 import * as Config from "effect/Config";
@@ -53,6 +54,7 @@ export interface ProviderMaintenanceCommandAction {
 export interface ProviderMaintenanceCapabilityResolutionOptions {
   readonly binaryPath?: string | null;
   readonly env?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
   readonly resolvedCommandPath?: string | null;
   readonly realCommandPath?: string | null;
 }
@@ -377,9 +379,11 @@ export const resolveProviderMaintenanceCapabilitiesEffect = Effect.fn(
   const realCommandPath = yield* fileSystem
     .realPath(resolvedCommandPath)
     .pipe(Effect.orElseSucceed(() => resolvedCommandPath));
+  const platform = yield* HostProcessPlatform;
   return resolver.resolve({
     ...options,
     env,
+    platform,
     resolvedCommandPath,
     realCommandPath,
   });
