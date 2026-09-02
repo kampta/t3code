@@ -56,7 +56,7 @@ const SSH_READY_PROBE_TIMEOUT_MS = 1_000;
 const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
 const REMOTE_LAUNCH_TIMEOUT_MS = 90_000;
-const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
+const REMOTE_REUSE_READY_TIMEOUT_MS = 15_000;
 
 export interface RemoteT3RunnerOptions {
   readonly packageSpec?: string;
@@ -228,7 +228,7 @@ function applyScriptPlaceholders(
 ): string {
   let result = template;
   for (const [token, value] of Object.entries(replacements)) {
-    result = result.replaceAll(`@@${token}@@`, value);
+    result = result.replaceAll(`@@${token}@@`, () => value);
   }
   return result;
 }
@@ -414,6 +414,9 @@ ensure_remote_node_path() {
 export const REMOTE_RUNNER_SCRIPT = `#!/bin/sh
 set -eu
 @@T3_NODE_ENV_SCRIPT@@
+if [ "\${1:-}" = "serve" ]; then
+@@T3_RECORD_RUNNER_PROCESS_IDENTITY_SCRIPT@@
+fi
 ensure_remote_node_path || true
 T3_NODE_SCRIPT_PATH=@@T3_NODE_SCRIPT_PATH@@
 if [ -n "$T3_NODE_SCRIPT_PATH" ]; then
@@ -452,6 +455,37 @@ printf 'Remote host is missing the t3 CLI and could not install @@T3_PACKAGE_SPE
 exit 1
 `;
 
+const REMOTE_MANAGED_PROCESS_IDENTITY_SCRIPT = `managed_process_start() {
+  PID_TO_IDENTIFY="$1"
+  if [ -r "/proc/$PID_TO_IDENTIFY/stat" ]; then
+    PROCESS_START="$(sed 's/^.*) //' "/proc/$PID_TO_IDENTIFY/stat" | awk '{print $20}')"
+    if [ -n "$PROCESS_START" ]; then
+      printf 'pid:%s:proc:%s\n' "$PID_TO_IDENTIFY" "$PROCESS_START"
+    fi
+    return
+  fi
+  PROCESS_START="$(ps -o lstart= -p "$PID_TO_IDENTIFY" 2>/dev/null | awk '{$1=$1; print}')"
+  if [ -n "$PROCESS_START" ]; then
+    printf 'pid:%s:ps:%s\n' "$PID_TO_IDENTIFY" "$PROCESS_START"
+  fi
+}
+managed_pid_is_owned() {
+  [ -n "\${REMOTE_PID:-}" ] &&
+    [ -n "\${REMOTE_PROCESS_START:-}" ] &&
+    kill -0 "$REMOTE_PID" 2>/dev/null &&
+    [ "$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)" = "$REMOTE_PROCESS_START" ]
+}`;
+
+const REMOTE_RECORD_RUNNER_PROCESS_IDENTITY_SCRIPT = `${REMOTE_MANAGED_PROCESS_IDENTITY_SCRIPT}
+REMOTE_PID=$$
+REMOTE_PROCESS_START="$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)"
+if [ -z "$REMOTE_PROCESS_START" ]; then
+  printf 'Remote T3 server process identity could not be recorded safely.\\n' >&2
+  exit 1
+fi
+RUNNER_STATE_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+printf '%s\\n' "$REMOTE_PROCESS_START" >"$RUNNER_STATE_DIR/process-start"`;
+
 export const REMOTE_LAUNCH_SCRIPT = `set -eu
 @@T3_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
@@ -461,8 +495,13 @@ DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"
 PORT_FILE="$STATE_DIR/port"
 PID_FILE="$STATE_DIR/pid"
 MANAGED_FILE="$STATE_DIR/managed"
+PROCESS_START_FILE="$STATE_DIR/process-start"
 LOG_FILE="$STATE_DIR/server.log"
 RUNNER_FILE="$STATE_DIR/run-t3.sh"
+RUNNER_ID_FILE="$STATE_DIR/runner-id"
+RUNNER_ID=@@T3_RUNNER_ID@@
+EXPECTED_NODE_SCRIPT_PATH=@@T3_EXPECTED_NODE_SCRIPT_PATH@@
+EXPECTED_PACKAGE_SPEC=@@T3_EXPECTED_PACKAGE_SPEC@@
 RUNNER_NEXT="$STATE_DIR/run-t3.next.$$"
 mkdir -p "$STATE_DIR"
 cleanup_runner_next() {
@@ -473,7 +512,7 @@ cat >"$RUNNER_NEXT" <<'SH'
 @@T3_RUNNER_SCRIPT@@
 SH
 RUNNER_CHANGED=0
-if [ ! -f "$RUNNER_FILE" ] || ! cmp -s "$RUNNER_NEXT" "$RUNNER_FILE"; then
+if [ ! -f "$RUNNER_ID_FILE" ] || [ "$(cat "$RUNNER_ID_FILE" 2>/dev/null || true)" != "$RUNNER_ID" ]; then
   RUNNER_CHANGED=1
 fi
 mv "$RUNNER_NEXT" "$RUNNER_FILE"
@@ -500,6 +539,41 @@ wait_for_pid_exit() {
     sleep 0.1
   done
 }
+@@T3_MANAGED_PROCESS_IDENTITY_SCRIPT@@
+tracked_managed_pid_matches_command() {
+  [ -n "$REMOTE_PID" ] &&
+    [ -n "$REMOTE_PORT" ] || return 1
+  if [ -r "/proc/$REMOTE_PID/cmdline" ]; then
+    PROCESS_ARGS="$(tr '\\000' '\\n' <"/proc/$REMOTE_PID/cmdline")"
+    for EXPECTED_ARG in serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME"; do
+      printf '%s\\n' "$PROCESS_ARGS" | grep -Fqx -- "$EXPECTED_ARG" || return 1
+    done
+    if [ -n "$EXPECTED_NODE_SCRIPT_PATH" ]; then
+      printf '%s\\n' "$PROCESS_ARGS" | grep -Fqx -- "$EXPECTED_NODE_SCRIPT_PATH"
+      return
+    fi
+    [ -n "$EXPECTED_PACKAGE_SPEC" ] || return 1
+    if printf '%s\\n' "$PROCESS_ARGS" | grep -Fqx -- "$EXPECTED_PACKAGE_SPEC"; then
+      return 0
+    fi
+    printf '%s\\n' "$PROCESS_ARGS" | grep -Eq '(^|/)t3$|/node_modules/(\\.bin/t3|t3/dist/bin\\.mjs)$'
+    return
+  fi
+  PROCESS_COMMAND="$(ps -ww -o command= -p "$REMOTE_PID" 2>/dev/null || true)"
+  [ -n "$PROCESS_COMMAND" ] || return 1
+  EXPECTED_T3_ARGS="serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME"
+  if [ -n "$EXPECTED_NODE_SCRIPT_PATH" ]; then
+    case "$PROCESS_COMMAND" in
+      *"$EXPECTED_NODE_SCRIPT_PATH $EXPECTED_T3_ARGS") return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+  [ -n "$EXPECTED_PACKAGE_SPEC" ] || return 1
+  case "$PROCESS_COMMAND" in
+    *"$EXPECTED_PACKAGE_SPEC $EXPECTED_T3_ARGS"|*"/node_modules/t3/dist/bin.mjs $EXPECTED_T3_ARGS"|*"/node_modules/.bin/t3 $EXPECTED_T3_ARGS"|"t3 $EXPECTED_T3_ARGS") return 0 ;;
+    *) return 1 ;;
+  esac
+}
 resolve_default_runtime_port() {
   node - "$DEFAULT_RUNTIME_FILE" <<'NODE'
 const fs = require("node:fs");
@@ -525,6 +599,7 @@ NODE
 REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
 REMOTE_PORT="$(cat "$PORT_FILE" 2>/dev/null || true)"
 REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
+REMOTE_PROCESS_START="$(cat "$PROCESS_START_FILE" 2>/dev/null || true)"
 DEFAULT_RUNTIME_INFO="$(resolve_default_runtime_port 2>/dev/null || true)"
 DEFAULT_RUNTIME_PID=""
 DEFAULT_REMOTE_PORT=""
@@ -532,55 +607,84 @@ if [ -n "$DEFAULT_RUNTIME_INFO" ]; then
   DEFAULT_RUNTIME_PID="\${DEFAULT_RUNTIME_INFO%% *}"
   DEFAULT_REMOTE_PORT="\${DEFAULT_RUNTIME_INFO#* }"
 fi
-if [ -n "$DEFAULT_REMOTE_PORT" ]; then
+DEFAULT_RUNTIME_IS_TRACKED_MANAGED=0
+if [ "$REMOTE_MANAGED" = "managed" ] && [ "$REMOTE_PID" = "$DEFAULT_RUNTIME_PID" ]; then
+  if ! managed_pid_is_owned && [ -z "$REMOTE_PROCESS_START" ] && tracked_managed_pid_matches_command; then
+    REMOTE_PROCESS_START="$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)"
+    if [ -n "$REMOTE_PROCESS_START" ]; then
+      printf '%s\\n' "$REMOTE_PROCESS_START" >"$PROCESS_START_FILE"
+    fi
+  fi
+  if managed_pid_is_owned; then
+    DEFAULT_RUNTIME_IS_TRACKED_MANAGED=1
+  fi
+fi
+if [ -n "$DEFAULT_REMOTE_PORT" ] && [ "$DEFAULT_RUNTIME_IS_TRACKED_MANAGED" -eq 0 ]; then
   REMOTE_PORT="$DEFAULT_REMOTE_PORT"
   if wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
     if [ "$REMOTE_MANAGED" = "managed" ]; then
-      PID_TO_STOP="\${REMOTE_PID:-$DEFAULT_RUNTIME_PID}"
-      if [ -n "$PID_TO_STOP" ] && kill -0 "$PID_TO_STOP" 2>/dev/null; then
-        kill "$PID_TO_STOP" 2>/dev/null || true
-        wait_for_pid_exit "$PID_TO_STOP"
+      if managed_pid_is_owned; then
+        kill "$REMOTE_PID" 2>/dev/null || true
+        wait_for_pid_exit "$REMOTE_PID"
+        if managed_pid_is_owned; then
+          printf 'Tracked remote T3 server process %s did not exit after a replacement server became available; keeping its managed state for a later retry.\\n' "$REMOTE_PID" >&2
+          exit 1
+        fi
       fi
       REMOTE_PID=""
+      REMOTE_PROCESS_START=""
       REMOTE_PORT="$DEFAULT_REMOTE_PORT"
       REMOTE_MANAGED="external"
-      rm -f "$PID_FILE"
+      rm -f "$PID_FILE" "$PROCESS_START_FILE"
       printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
       printf 'external\\n' >"$MANAGED_FILE"
     else
       printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
       printf 'external\\n' >"$MANAGED_FILE"
       REMOTE_PID=""
+      REMOTE_PROCESS_START=""
       REMOTE_MANAGED="external"
+      rm -f "$PROCESS_START_FILE"
     fi
   else
     REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
     REMOTE_PORT="$(cat "$PORT_FILE" 2>/dev/null || true)"
     REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
+    REMOTE_PROCESS_START="$(cat "$PROCESS_START_FILE" 2>/dev/null || true)"
   fi
 fi
 if [ "$REMOTE_MANAGED" = "external" ]; then
   if [ -z "$REMOTE_PORT" ] || ! wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
     REMOTE_PID=""
+    REMOTE_PROCESS_START=""
     REMOTE_PORT=""
     REMOTE_MANAGED=""
   fi
-elif [ -n "$REMOTE_PID" ] && [ -n "$REMOTE_PORT" ] && kill -0 "$REMOTE_PID" 2>/dev/null; then
+elif [ -n "$REMOTE_PORT" ] && managed_pid_is_owned; then
   if [ "$RUNNER_CHANGED" -eq 1 ]; then
     kill "$REMOTE_PID" 2>/dev/null || true
     wait_for_pid_exit "$REMOTE_PID"
+    if managed_pid_is_owned; then
+      printf 'Tracked remote T3 server process %s did not exit after a runner update requested a restart; keeping its managed state and runner update pending for a later retry.\\n' "$REMOTE_PID" >&2
+      exit 1
+    fi
     REMOTE_PID=""
+    REMOTE_PROCESS_START=""
     REMOTE_PORT=""
     REMOTE_MANAGED=""
   elif ! wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
-    kill "$REMOTE_PID" 2>/dev/null || true
-    wait_for_pid_exit "$REMOTE_PID"
+    if managed_pid_is_owned; then
+      printf 'Tracked remote T3 server process %s did not answer readiness checks on 127.0.0.1:%s; leaving it running and tracked for a later retry.\\n' "$REMOTE_PID" "$REMOTE_PORT" >&2
+      exit 1
+    fi
     REMOTE_PID=""
+    REMOTE_PROCESS_START=""
     REMOTE_PORT=""
     REMOTE_MANAGED=""
   fi
 else
   REMOTE_PID=""
+  REMOTE_PROCESS_START=""
   REMOTE_PORT=""
   REMOTE_MANAGED=""
 fi
@@ -590,11 +694,18 @@ if [ -z "$REMOTE_PORT" ]; then
     printf 'Failed to find an available port on the remote host. Ensure node is available on PATH.\\n' >&2
     exit 1
   fi
+  printf '%s\\n' "$RUNNER_ID" >"$RUNNER_ID_FILE"
   nohup env T3CODE_NO_BROWSER=1 "$RUNNER_FILE" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME" >>"$LOG_FILE" 2>&1 < /dev/null &
   REMOTE_PID="$!"
+  REMOTE_PROCESS_START="$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)"
+  if [ -z "$REMOTE_PROCESS_START" ]; then
+    printf 'Remote T3 server process identity could not be recorded safely.\\n' >&2
+    exit 1
+  fi
   printf '%s\\n' "$REMOTE_PID" >"$PID_FILE"
   printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
   printf 'managed\\n' >"$MANAGED_FILE"
+  printf '%s\\n' "$REMOTE_PROCESS_START" >"$PROCESS_START_FILE"
   if ! wait_ready "@@T3_READY_TIMEOUT_MS@@"; then
     printf 'Remote T3 server did not become ready on 127.0.0.1:%s.\\n' "$REMOTE_PORT" >&2
     if [ -s "$LOG_FILE" ]; then
@@ -602,12 +713,15 @@ if [ -z "$REMOTE_PORT" ]; then
     else
       printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
     fi
-    kill "$REMOTE_PID" 2>/dev/null || true
-    wait_for_pid_exit "$REMOTE_PID"
-    rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE"
+    if managed_pid_is_owned; then
+      printf 'The new remote T3 server process %s is still running, so it remains tracked for a later readiness retry.\\n' "$REMOTE_PID" >&2
+    else
+      rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$PROCESS_START_FILE"
+    fi
     exit 1
   fi
 fi
+printf '%s\\n' "$RUNNER_ID" >"$RUNNER_ID_FILE"
 printf '{"remotePort":%s,"serverKind":"%s"}\\n' "$REMOTE_PORT" "\${REMOTE_MANAGED:-managed}"
 `;
 
@@ -629,9 +743,12 @@ STATE_DIR="$HOME/.t3/ssh-launch/@@T3_STATE_KEY@@"
 PID_FILE="$STATE_DIR/pid"
 PORT_FILE="$STATE_DIR/port"
 MANAGED_FILE="$STATE_DIR/managed"
+PROCESS_START_FILE="$STATE_DIR/process-start"
 REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
 REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
-if [ "$REMOTE_MANAGED" != "external" ] && [ -n "$REMOTE_PID" ] && kill -0 "$REMOTE_PID" 2>/dev/null; then
+REMOTE_PROCESS_START="$(cat "$PROCESS_START_FILE" 2>/dev/null || true)"
+@@T3_MANAGED_PROCESS_IDENTITY_SCRIPT@@
+if [ "$REMOTE_MANAGED" != "external" ] && managed_pid_is_owned; then
   kill "$REMOTE_PID" 2>/dev/null || true
   WAIT_COUNT=0
   while kill -0 "$REMOTE_PID" 2>/dev/null && [ "$WAIT_COUNT" -lt 20 ]; do
@@ -639,7 +756,7 @@ if [ "$REMOTE_MANAGED" != "external" ] && [ -n "$REMOTE_PID" ] && kill -0 "$REMO
     sleep 0.1
   done
 fi
-rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE"
+rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$PROCESS_START_FILE"
 printf '{"stopped":true}\\n'
 `;
 
@@ -659,8 +776,20 @@ export function buildRemoteT3RunnerScript(input?: RemoteT3RunnerOptions): string
       T3_PACKAGE_SPEC: packageSpec,
       T3_NODE_SCRIPT_PATH: shellSingleQuote(nodeScriptPath),
       T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
+      T3_RECORD_RUNNER_PROCESS_IDENTITY_SCRIPT: stripTrailingNewlines(
+        REMOTE_RECORD_RUNNER_PROCESS_IDENTITY_SCRIPT,
+      ),
     }),
   );
+}
+
+export function buildRemoteT3RunnerIdentity(input?: RemoteT3RunnerOptions): string {
+  const nodeScriptPath = input?.nodeScriptPath?.trim() || "";
+  return JSON.stringify({
+    kind: nodeScriptPath ? "node-script" : "package",
+    source: nodeScriptPath || input?.packageSpec?.trim() || "t3@latest",
+    nodeEngineRange: input?.nodeEngineRange?.trim() || "",
+  });
 }
 
 export function buildRemoteNodeEnvScript(input?: RemoteT3RunnerOptions): string {
@@ -676,6 +805,14 @@ export function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
   return applyScriptPlaceholders(REMOTE_LAUNCH_SCRIPT, {
     T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
     T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteT3RunnerScript(input)),
+    T3_RUNNER_ID: shellSingleQuote(buildRemoteT3RunnerIdentity(input)),
+    T3_EXPECTED_NODE_SCRIPT_PATH: shellSingleQuote(input?.nodeScriptPath?.trim() || ""),
+    T3_EXPECTED_PACKAGE_SPEC: shellSingleQuote(
+      input?.nodeScriptPath?.trim() ? "" : input?.packageSpec?.trim() || "t3@latest",
+    ),
+    T3_MANAGED_PROCESS_IDENTITY_SCRIPT: stripTrailingNewlines(
+      REMOTE_MANAGED_PROCESS_IDENTITY_SCRIPT,
+    ),
     T3_PICK_PORT_SCRIPT: stripTrailingNewlines(REMOTE_PICK_PORT_SCRIPT),
     T3_WAIT_READY_SCRIPT: stripTrailingNewlines(REMOTE_WAIT_READY_SCRIPT),
     T3_DEFAULT_REMOTE_PORT: String(DEFAULT_REMOTE_PORT),
@@ -699,6 +836,9 @@ export function buildRemotePairingScript(
 export function buildRemoteStopScript(target: DesktopSshEnvironmentTarget): string {
   return applyScriptPlaceholders(REMOTE_STOP_SCRIPT, {
     T3_STATE_KEY: remoteStateKey(target),
+    T3_MANAGED_PROCESS_IDENTITY_SCRIPT: stripTrailingNewlines(
+      REMOTE_MANAGED_PROCESS_IDENTITY_SCRIPT,
+    ),
   });
 }
 
@@ -1382,9 +1522,6 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ),
     );
     tunnels.set(input.key, tunnelEntry);
-    const spawnerService = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const fileSystemService = yield* FileSystem.FileSystem;
-    const pathService = yield* Path.Path;
     yield* Scope.addFinalizer(
       entryScope,
       Effect.gen(function* () {
@@ -1398,33 +1535,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           remotePort: tunnelEntry.remotePort,
         });
         tunnels.delete(tunnelEntry.key);
-        const authSecret = authSecrets.get(tunnelEntry.key) ?? null;
-        yield* Effect.all(
-          [
-            tunnelEntry.process.kill({
-              killSignal: "SIGTERM",
-              forceKillAfter: TUNNEL_SHUTDOWN_TIMEOUT_MS,
-            }),
-            stopRemoteServer(
-              tunnelEntry.target,
-              authSecret === null
-                ? {
-                    batchMode: "yes",
-                    interactiveAuth: false,
-                  }
-                : {
-                    authSecret,
-                    batchMode: "no",
-                    interactiveAuth: true,
-                  },
-            ).pipe(
-              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawnerService),
-              Effect.provideService(FileSystem.FileSystem, fileSystemService),
-              Effect.provideService(Path.Path, pathService),
-            ),
-          ],
-          { concurrency: "unbounded" },
-        ).pipe(Effect.ignore);
+        yield* tunnelEntry.process
+          .kill({
+            killSignal: "SIGTERM",
+            forceKillAfter: TUNNEL_SHUTDOWN_TIMEOUT_MS,
+          })
+          .pipe(Effect.ignore);
         yield* Effect.logDebug("ssh.environment.tunnel.finalizer.succeeded", {
           ...sshTargetLogFields(tunnelEntry.target),
           key: tunnelEntry.key,
@@ -1600,13 +1716,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       yield* closeTunnelEntry(entry);
     }
     yield* cancelPendingTunnelEntry(key, resolvedTarget);
-    if (entry === null) {
-      yield* runWithSshAuth({
-        key,
-        target: resolvedTarget,
-        operation: (authOptions) => stopRemoteServer(resolvedTarget, authOptions),
-      });
-    }
+    yield* runWithSshAuth({
+      key,
+      target: resolvedTarget,
+      operation: (authOptions) => stopRemoteServer(resolvedTarget, authOptions),
+    });
     yield* Effect.logInfo("ssh.environment.disconnect.succeeded", {
       ...sshTargetLogFields(resolvedTarget),
       key,
