@@ -1,3 +1,5 @@
+import * as NodeCrypto from "node:crypto";
+
 import {
   EnvironmentHttpApi,
   ProviderDriverKind,
@@ -137,10 +139,11 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
-  clearPersistedServerRuntimeState,
+  clearPersistedServerRuntimeStateIfOwned,
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
+import { acquireServerOwnership, ServerOwnershipToken } from "./serverOwnership.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
@@ -627,6 +630,7 @@ export const makeRoutesLayer = Layer.mergeAll(
 const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const ownershipToken = (yield* ServerOwnershipToken) ?? NodeCrypto.randomUUID();
     const activation = yield* Deferred.make<void>();
     const awaitActivation = Deferred.await(activation);
     const activationLayer = Layer.succeed(ServerActivation, awaitActivation);
@@ -659,6 +663,7 @@ const makeServerLayer = Layer.unwrap(
           const state = yield* makePersistedServerRuntimeState({
             config,
             port: address.port,
+            ownerToken: ownershipToken,
           });
           yield* persistServerRuntimeState({
             path: config.serverRuntimeStatePath,
@@ -670,7 +675,10 @@ const makeServerLayer = Layer.unwrap(
           );
         }),
         () =>
-          clearPersistedServerRuntimeState(config.serverRuntimeStatePath).pipe(
+          clearPersistedServerRuntimeStateIfOwned({
+            path: config.serverRuntimeStatePath,
+            ownerToken: ownershipToken,
+          }).pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("Failed to clear server runtime state", { cause }),
             ),
@@ -837,5 +845,17 @@ const makeServerLayer = Layer.unwrap(
   }),
 );
 
-// The CLI supplies configuration.
-export const runServer = Layer.launch(makeServerLayer);
+const launchServer = Layer.launch(makeServerLayer);
+
+// The CLI supplies configuration. Ownership wraps the complete server scope so
+// no programmatic caller can open persistence or providers for an already-live
+// state directory.
+export const runServer = Effect.scoped(
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const ownership = yield* acquireServerOwnership(config.stateDir);
+    return yield* launchServer.pipe(
+      Effect.provideService(ServerOwnershipToken, ownership.record.token),
+    );
+  }),
+);
