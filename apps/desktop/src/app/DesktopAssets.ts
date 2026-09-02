@@ -79,7 +79,7 @@ function resolveSourceTreeIconPath(
   ext: keyof DesktopIconPaths,
 ): string | undefined {
   if (environment.isPackaged || ext === "icns") return undefined;
-  const brand = environment.isDevelopment ? "dev" : "prod";
+  const brand = environment.isDevelopmentBuild ? "dev" : "prod";
   const fileNames = sourceTreeIconFileNames[brand];
   const fileName =
     ext === "ico"
