@@ -741,6 +741,18 @@ describe("resolveComposerProviderSelection", () => {
     ).toEqual({ enabled: false, interactionMode: "default" });
   });
 
+  it("prefers ready Codex when no provider has been selected", () => {
+    const selection = resolveComposerProviderSelection({
+      entries: [entry("claudeAgent"), entry("codex")],
+      candidateInstanceIds: [null],
+      lockedProvider: null,
+      lockedInstanceId: null,
+    });
+
+    expect(selection.selectedProviderEntry?.instanceId).toBe(ProviderInstanceId.make("codex"));
+    expect(selection.requestedDriverKind).toBe(ProviderDriverKind.make("codex"));
+  });
+
   it("uses the fallback provider's plan capability after the draft's instance is disabled", () => {
     const disabledEntry = entry("antigravity", "antigravity", {
       enabled: false,

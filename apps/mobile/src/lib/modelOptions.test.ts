@@ -6,6 +6,7 @@ import {
   buildModelOptions,
   groupByProvider,
   isModelSelectionUnavailable,
+  resolveDefaultModelSelection,
   resolveDefaultableModelSelection,
   resolveNewTaskModelSelection,
   resolveSelectableModelSelection,
@@ -13,6 +14,184 @@ import {
 } from "./modelOptions";
 
 describe("mobile model options", () => {
+  it("prefers the Codex default when Claude is listed first", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
+          displayName: "Claude",
+          enabled: true,
+          installed: true,
+          status: "ready",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "claude-fable-5",
+              name: "Claude Fable 5",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+        {
+          instanceId: "codex",
+          driver: "codex",
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          status: "ready",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "gpt-5.6-sol",
+              name: "GPT-5.6 Sol",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(resolveDefaultModelSelection(buildModelOptions(config, null))).toMatchObject({
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+    });
+  });
+
+  it("prefers the built-in Codex instance over a custom Codex instance", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "codex_work",
+          driver: "codex",
+          displayName: "Codex Work",
+          enabled: true,
+          installed: true,
+          status: "ready",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "gpt-work",
+              name: "GPT Work",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+        {
+          instanceId: "codex",
+          driver: "codex",
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          status: "ready",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "gpt-default",
+              name: "GPT Default",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(resolveDefaultModelSelection(buildModelOptions(config, null))).toMatchObject({
+      instanceId: "codex",
+      model: "gpt-default",
+    });
+  });
+
+  it("prefers a ready Claude provider over an errored Codex provider", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "codex",
+          driver: "codex",
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          status: "error",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "gpt-5.6-sol",
+              name: "GPT-5.6 Sol",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+        {
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
+          displayName: "Claude",
+          enabled: true,
+          installed: true,
+          status: "ready",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "claude-fable-5",
+              name: "Claude Fable 5",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(resolveDefaultModelSelection(buildModelOptions(config, null))).toMatchObject({
+      instanceId: "claudeAgent",
+      model: "claude-fable-5",
+    });
+  });
+
+  it("does not select a warning provider as an implicit default", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "codex",
+          driver: "codex",
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          status: "warning",
+          availability: "available",
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "gpt-warning",
+              name: "GPT Warning",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(resolveDefaultModelSelection(buildModelOptions(config, null))).toBeNull();
+  });
+
   it("groups models by provider and flags legacy entries", () => {
     const config = {
       providers: [
@@ -348,6 +527,8 @@ describe("mobile model options", () => {
           displayName: "Codex",
           enabled: true,
           installed: true,
+          status: "ready",
+          availability: "available",
           auth: { status: "authenticated" },
           models: [
             { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isCustom: false, capabilities: null },
@@ -380,6 +561,18 @@ describe("mobile model options", () => {
     const providerDefault = {
       selection: { instanceId: ProviderInstanceId.make("codex"), model: "default" },
       isDefault: true,
+      isLegacy: false,
+      isProviderReady: true,
+      providerKey: "codex",
+      providerDriver: "codex",
+    } as ModelOption;
+    const claudeDefault = {
+      selection: { instanceId: ProviderInstanceId.make("claudeAgent"), model: "default" },
+      isDefault: true,
+      isLegacy: false,
+      isProviderReady: true,
+      providerKey: "claudeAgent",
+      providerDriver: "claudeAgent",
     } as ModelOption;
     const resolve = (
       draftSelection: ModelSelection | null,
@@ -390,7 +583,7 @@ describe("mobile model options", () => {
         draftSelection,
         projectDefaultSelection,
         stickySelection,
-        modelOptions: [providerDefault],
+        modelOptions: [claudeDefault, providerDefault],
       });
 
     expect(resolve(draft, project, sticky)).toBe(draft);
