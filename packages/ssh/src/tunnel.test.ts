@@ -51,6 +51,100 @@ function readProcessStart(pid: number): string {
   return `pid:${pid}:ps:${result.stdout.trim().replace(/\s+/gu, " ")}`;
 }
 
+function buildFastRemoteLaunchScript(input?: Parameters<typeof buildRemoteLaunchScript>[0]) {
+  return buildRemoteLaunchScript(input)
+    .replaceAll('wait_ready "15000"', 'wait_ready "300"')
+    .replaceAll('wait_ready "60000"', 'wait_ready "300"')
+    .replace('node - "$REMOTE_PORT" "$1" "1000"', 'node - "$REMOTE_PORT" "$1" "100"')
+    .replaceAll(
+      'while kill -0 "$PID_TO_WAIT" 2>/dev/null && [ "$WAIT_COUNT" -lt 20 ]; do',
+      'while kill -0 "$PID_TO_WAIT" 2>/dev/null && [ "$WAIT_COUNT" -lt 2 ]; do',
+    );
+}
+
+async function reserveLoopbackPort(): Promise<number> {
+  const reservation = NodeNet.createServer();
+  await new Promise<void>((resolve, reject) => {
+    reservation.once("error", reject);
+    reservation.listen(0, "127.0.0.1", resolve);
+  });
+  const address = reservation.address();
+  assert.isObject(address);
+  const port = typeof address === "object" && address !== null ? address.port : 0;
+  await new Promise<void>((resolve, reject) =>
+    reservation.close((error) => (error ? reject(error) : resolve())),
+  );
+  return port;
+}
+
+async function spawnPersistentManagedProcess(signalMarker: string) {
+  const child = NodeChildProcess.spawn(
+    process.execPath,
+    [
+      "-e",
+      'const fs = require("node:fs"); const marker = process.argv[1]; process.on("SIGTERM", () => fs.writeFileSync(marker, "signaled\\n")); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);',
+      signalMarker,
+    ],
+    { stdio: ["ignore", "pipe", "inherit"] },
+  );
+  await new Promise<void>((resolve, reject) => {
+    const handleExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      reject(
+        new Error(
+          "managed test process exited before ready: " + String(code === null ? signal : code),
+        ),
+      );
+    };
+    child.once("error", reject);
+    child.once("exit", handleExit);
+    child.stdout?.once("data", () => {
+      child.off("error", reject);
+      child.off("exit", handleExit);
+      resolve();
+    });
+  });
+  assert.isNumber(child.pid);
+  return child;
+}
+
+async function forceStopTestProcess(child: NodeChildProcess.ChildProcess) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve) => {
+    child.once("exit", () => resolve());
+    child.kill("SIGKILL");
+  });
+}
+
+function writeTrackedManagedState(input: {
+  readonly home: string;
+  readonly stateKey: string;
+  readonly pid: number;
+  readonly port: number;
+  readonly runnerIdentity: string;
+}) {
+  const stateDir = NodePath.join(input.home, ".t3", "ssh-launch", input.stateKey);
+  const userdataDir = NodePath.join(input.home, ".t3", "userdata");
+  NodeFS.mkdirSync(stateDir, { recursive: true });
+  NodeFS.mkdirSync(userdataDir, { recursive: true });
+  NodeFS.writeFileSync(NodePath.join(stateDir, "pid"), String(input.pid) + "\n");
+  NodeFS.writeFileSync(NodePath.join(stateDir, "port"), String(input.port) + "\n");
+  NodeFS.writeFileSync(NodePath.join(stateDir, "managed"), "managed\n");
+  NodeFS.writeFileSync(
+    NodePath.join(stateDir, "process-start"),
+    readProcessStart(input.pid) + "\n",
+  );
+  NodeFS.writeFileSync(NodePath.join(stateDir, "runner-id"), input.runnerIdentity + "\n");
+  NodeFS.writeFileSync(
+    NodePath.join(userdataDir, "server-runtime.json"),
+    JSON.stringify({
+      pid: input.pid,
+      port: input.port,
+      origin: "http://127.0.0.1:" + String(input.port),
+    }),
+  );
+  return stateDir;
+}
+
 const makeSuccessfulProcess = (stdout: string) => {
   const stdoutStream = Stream.make(new TextEncoder().encode(stdout));
   return ChildProcessSpawner.makeHandle({
@@ -382,6 +476,210 @@ describe("ssh tunnel scripts", () => {
       if (server.exitCode === null) {
         server.kill();
       }
+      NodeFS.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an unready exact managed process alive and tracked for retry", async () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-ssh-unready-managed-"));
+    const home = NodePath.join(root, "home");
+    const stateKey = "unready-managed-regression";
+    const signalMarker = NodePath.join(root, "signaled");
+    const runner = { nodeScriptPath: "/unused/t3-server.mjs" } as const;
+    const port = await reserveLoopbackPort();
+    const server = await spawnPersistentManagedProcess(signalMarker);
+
+    try {
+      const pid = server.pid;
+      assert.isNumber(pid);
+      const stateDir = writeTrackedManagedState({
+        home,
+        stateKey,
+        pid: pid!,
+        port,
+        runnerIdentity: buildRemoteT3RunnerIdentity(runner),
+      });
+
+      const result = NodeChildProcess.spawnSync("sh", ["-s", "--", stateKey], {
+        encoding: "utf8",
+        env: { ...process.env, HOME: home },
+        input: buildFastRemoteLaunchScript(runner),
+        timeout: 5_000,
+      });
+
+      if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        return;
+      }
+
+      assert.notEqual(result.status, 0, result.stderr || result.error?.message);
+      assert.include(result.stderr, "did not answer readiness checks");
+      assert.include(result.stderr, "leaving it running and tracked");
+      assert.isFalse(
+        NodeFS.existsSync(signalMarker),
+        "a readiness timeout must not signal the exact managed process",
+      );
+      assert.isNull(server.exitCode, "the exact managed process must remain alive");
+      assert.equal(NodeFS.readFileSync(NodePath.join(stateDir, "pid"), "utf8").trim(), String(pid));
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(stateDir, "process-start"), "utf8").trim(),
+        readProcessStart(pid!),
+      );
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(stateDir, "runner-id"), "utf8").trim(),
+        buildRemoteT3RunnerIdentity(runner),
+      );
+    } finally {
+      await forceStopTestProcess(server);
+      NodeFS.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a newly launched unready process alive and exactly tracked", async () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-ssh-unready-launch-"));
+    const home = NodePath.join(root, "home");
+    const stateKey = "unready-launch-regression";
+    const stateDir = NodePath.join(home, ".t3", "ssh-launch", stateKey);
+    const serverEntry = NodePath.join(root, "unready-server.cjs");
+    const launchMarker = NodePath.join(root, "launches");
+    const signalMarker = NodePath.join(root, "signaled");
+    const port = await reserveLoopbackPort();
+    NodeFS.mkdirSync(stateDir, { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(stateDir, "port"), String(port) + "\n");
+    NodeFS.writeFileSync(
+      serverEntry,
+      [
+        'const fs = require("node:fs");',
+        'const http = require("node:http");',
+        "const launchMarker = " + JSON.stringify(launchMarker) + ";",
+        "const signalMarker = " + JSON.stringify(signalMarker) + ";",
+        'const args = process.argv.slice(2); const port = Number(args[args.indexOf("--port") + 1]);',
+        'fs.appendFileSync(launchMarker, String(process.pid) + "\\n");',
+        'process.on("SIGTERM", () => fs.appendFileSync(signalMarker, "signaled\\n"));',
+        'http.createServer((_request, response) => { response.writeHead(503); response.end("not ready"); }).listen(port, "127.0.0.1");',
+      ].join("\n"),
+    );
+    const runner = { nodeScriptPath: serverEntry } as const;
+    let launchedPid: number | null = null;
+
+    try {
+      const result = NodeChildProcess.spawnSync("sh", ["-s", "--", stateKey], {
+        encoding: "utf8",
+        env: { ...process.env, HOME: home },
+        input: buildFastRemoteLaunchScript(runner).replaceAll(
+          'wait_ready "300"',
+          'wait_ready "1000"',
+        ),
+        timeout: 5_000,
+      });
+
+      if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        return;
+      }
+
+      assert.notEqual(
+        result.status,
+        0,
+        JSON.stringify({
+          stdout: result.stdout,
+          stderr: result.stderr,
+          error: result.error?.message,
+        }),
+      );
+      assert.include(result.stderr, "did not become ready");
+      assert.include(result.stderr, "remains tracked for a later readiness retry");
+      launchedPid = Number(NodeFS.readFileSync(NodePath.join(stateDir, "pid"), "utf8").trim());
+      assert.isTrue(Number.isInteger(launchedPid) && launchedPid > 0);
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(stateDir, "process-start"), "utf8").trim(),
+        readProcessStart(launchedPid),
+      );
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(stateDir, "managed"), "utf8").trim(),
+        "managed",
+      );
+      assert.equal(
+        Number(NodeFS.readFileSync(NodePath.join(stateDir, "port"), "utf8").trim()),
+        port,
+      );
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(stateDir, "runner-id"), "utf8").trim(),
+        buildRemoteT3RunnerIdentity(runner),
+      );
+      assert.deepEqual(
+        NodeFS.readFileSync(launchMarker, "utf8").trim().split(/\s+/u),
+        [String(launchedPid)],
+        "a readiness miss must not launch a replacement",
+      );
+      assert.isFalse(
+        NodeFS.existsSync(signalMarker),
+        "a readiness miss must not signal the newly tracked process",
+      );
+      assert.doesNotThrow(() => process.kill(launchedPid!, 0));
+    } finally {
+      if (launchedPid !== null) {
+        try {
+          process.kill(launchedPid, "SIGKILL");
+        } catch {
+          // The test process may already have exited after a failed assertion.
+        }
+      }
+      NodeFS.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a runner restart pending until the exact managed process exits", async () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-ssh-pending-restart-"));
+    const home = NodePath.join(root, "home");
+    const stateKey = "pending-runner-restart-regression";
+    const signalMarker = NodePath.join(root, "signaled");
+    const previousRunner = { nodeScriptPath: "/previous/t3-server.mjs" } as const;
+    const nextRunner = { nodeScriptPath: "/next/t3-server.mjs" } as const;
+    const port = await reserveLoopbackPort();
+    const server = await spawnPersistentManagedProcess(signalMarker);
+
+    try {
+      const pid = server.pid;
+      assert.isNumber(pid);
+      const previousRunnerIdentity = buildRemoteT3RunnerIdentity(previousRunner);
+      const stateDir = writeTrackedManagedState({
+        home,
+        stateKey,
+        pid: pid!,
+        port,
+        runnerIdentity: previousRunnerIdentity,
+      });
+
+      const result = NodeChildProcess.spawnSync("sh", ["-s", "--", stateKey], {
+        encoding: "utf8",
+        env: { ...process.env, HOME: home },
+        input: buildFastRemoteLaunchScript(nextRunner),
+        timeout: 5_000,
+      });
+
+      if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        return;
+      }
+
+      assert.notEqual(result.status, 0, result.stderr || result.error?.message);
+      assert.include(result.stderr, "runner update requested a restart");
+      assert.include(result.stderr, "runner update pending");
+      assert.isTrue(
+        NodeFS.existsSync(signalMarker),
+        "a runner update may request an exact managed process restart",
+      );
+      assert.isNull(server.exitCode, "a replacement must not start while the prior PID is alive");
+      assert.equal(NodeFS.readFileSync(NodePath.join(stateDir, "pid"), "utf8").trim(), String(pid));
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(stateDir, "process-start"), "utf8").trim(),
+        readProcessStart(pid!),
+      );
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(stateDir, "runner-id"), "utf8").trim(),
+        previousRunnerIdentity,
+        "the old identity keeps the requested runner restart pending on retry",
+      );
+    } finally {
+      await forceStopTestProcess(server);
       NodeFS.rmSync(root, { recursive: true, force: true });
     }
   });

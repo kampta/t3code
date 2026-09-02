@@ -517,7 +517,6 @@ if [ ! -f "$RUNNER_ID_FILE" ] || [ "$(cat "$RUNNER_ID_FILE" 2>/dev/null || true)
 fi
 mv "$RUNNER_NEXT" "$RUNNER_FILE"
 chmod 700 "$RUNNER_FILE"
-printf '%s\n' "$RUNNER_ID" >"$RUNNER_ID_FILE"
 if ! ensure_remote_node_path; then
   printf 'Remote host is missing node on PATH. Install Node or configure a supported version manager for non-interactive shells.\\n' >&2
   exit 1
@@ -627,6 +626,10 @@ if [ -n "$DEFAULT_REMOTE_PORT" ] && [ "$DEFAULT_RUNTIME_IS_TRACKED_MANAGED" -eq 
       if managed_pid_is_owned; then
         kill "$REMOTE_PID" 2>/dev/null || true
         wait_for_pid_exit "$REMOTE_PID"
+        if managed_pid_is_owned; then
+          printf 'Tracked remote T3 server process %s did not exit after a replacement server became available; keeping its managed state for a later retry.\\n' "$REMOTE_PID" >&2
+          exit 1
+        fi
       fi
       REMOTE_PID=""
       REMOTE_PROCESS_START=""
@@ -661,13 +664,19 @@ elif [ -n "$REMOTE_PORT" ] && managed_pid_is_owned; then
   if [ "$RUNNER_CHANGED" -eq 1 ]; then
     kill "$REMOTE_PID" 2>/dev/null || true
     wait_for_pid_exit "$REMOTE_PID"
+    if managed_pid_is_owned; then
+      printf 'Tracked remote T3 server process %s did not exit after a runner update requested a restart; keeping its managed state and runner update pending for a later retry.\\n' "$REMOTE_PID" >&2
+      exit 1
+    fi
     REMOTE_PID=""
     REMOTE_PROCESS_START=""
     REMOTE_PORT=""
     REMOTE_MANAGED=""
   elif ! wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
-    kill "$REMOTE_PID" 2>/dev/null || true
-    wait_for_pid_exit "$REMOTE_PID"
+    if managed_pid_is_owned; then
+      printf 'Tracked remote T3 server process %s did not answer readiness checks on 127.0.0.1:%s; leaving it running and tracked for a later retry.\\n' "$REMOTE_PID" "$REMOTE_PORT" >&2
+      exit 1
+    fi
     REMOTE_PID=""
     REMOTE_PROCESS_START=""
     REMOTE_PORT=""
@@ -685,6 +694,7 @@ if [ -z "$REMOTE_PORT" ]; then
     printf 'Failed to find an available port on the remote host. Ensure node is available on PATH.\\n' >&2
     exit 1
   fi
+  printf '%s\\n' "$RUNNER_ID" >"$RUNNER_ID_FILE"
   nohup env T3CODE_NO_BROWSER=1 "$RUNNER_FILE" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME" >>"$LOG_FILE" 2>&1 < /dev/null &
   REMOTE_PID="$!"
   REMOTE_PROCESS_START="$(managed_process_start "$REMOTE_PID" 2>/dev/null || true)"
@@ -704,13 +714,14 @@ if [ -z "$REMOTE_PORT" ]; then
       printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
     fi
     if managed_pid_is_owned; then
-      kill "$REMOTE_PID" 2>/dev/null || true
-      wait_for_pid_exit "$REMOTE_PID"
+      printf 'The new remote T3 server process %s is still running, so it remains tracked for a later readiness retry.\\n' "$REMOTE_PID" >&2
+    else
+      rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$PROCESS_START_FILE"
     fi
-    rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$PROCESS_START_FILE"
     exit 1
   fi
 fi
+printf '%s\\n' "$RUNNER_ID" >"$RUNNER_ID_FILE"
 printf '{"remotePort":%s,"serverKind":"%s"}\\n' "$REMOTE_PORT" "\${REMOTE_MANAGED:-managed}"
 `;
 
