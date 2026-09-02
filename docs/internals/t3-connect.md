@@ -169,10 +169,11 @@ t3code-dev://app/
 t3code://app/
 ```
 
-Local desktop development uses `t3code-dev://app`, while packaged builds use `t3code://app`. Add the
-matching origin to each Clerk instance's Backend API `allowed_origins` array as well. The development
-Clerk instance should only need `t3code-dev://app`; the production Clerk instance should only need
-`t3code://app`. `@clerk/electron` owns the native request adapter, encrypted Clerk token persistence,
+Local desktop development and packaged development builds use `t3code-dev://app`, while production
+and nightly packaged builds use `t3code://app`. Add the matching origin to each Clerk instance's
+Backend API `allowed_origins` array as well. The development Clerk instance should only need
+`t3code-dev://app`; the production Clerk instance should only need `t3code://app`.
+`@clerk/electron` owns the native request adapter, encrypted Clerk token persistence,
 external-browser OAuth transport, and callback delivery for initial sign-in and linked-account flows.
 
 There is currently no Dashboard UI for `allowed_origins`. Preserve any existing entries and update
