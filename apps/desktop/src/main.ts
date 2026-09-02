@@ -94,6 +94,10 @@ const resolveDesktopSshCliRunner = (
   if (environment.isDevelopmentBuild) {
     return {
       nodeScriptPath: devRemoteEntryPath ?? "/home/kampta/code/t3code/apps/server/dist/bin.mjs",
+      nodeScriptBuildIdentity: Option.getOrElse(
+        environment.commitHashOverride,
+        () => environment.appVersion,
+      ),
       nodeEngineRange: serverPackageJson.engines.node,
     };
   }
