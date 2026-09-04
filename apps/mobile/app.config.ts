@@ -15,7 +15,9 @@ const runtimeVersionPolicy =
   (APP_VARIANT === "development" ? "appVersion" : "fingerprint");
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
+const personalTeamId = repoEnv.T3CODE_IOS_PERSONAL_TEAM_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+const IOS_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
 // Universal exports already contain their own rounded-square silhouette. Using one as an adaptive
@@ -29,6 +31,12 @@ if (
 ) {
   throw new Error(
     "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code when T3CODE_IOS_PERSONAL_TEAM=1.",
+  );
+}
+
+if (isIosPersonalTeamBuild && (!personalTeamId || !IOS_TEAM_ID_PATTERN.test(personalTeamId))) {
+  throw new Error(
+    "T3CODE_IOS_PERSONAL_TEAM_ID must be the 10-character uppercase Apple Team ID shown in Xcode when T3CODE_IOS_PERSONAL_TEAM=1.",
   );
 }
 
@@ -192,14 +200,17 @@ const config: ExpoConfig = {
     // showcase capture build requires full screen (see infoPlist below).
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
-    // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
-    // does not fall back to a personal team (which cannot sign app groups,
-    // Sign in with Apple, or push notification entitlements).
-    appleTeamId: "ARK85ZXQ4Z",
-    associatedDomains: [
-      `applinks:${variant.relyingParty}`,
-      `webcredentials:${variant.relyingParty}`,
-    ],
+    // Pin code signing so non-interactive `expo run:ios` uses the intended
+    // account. Personal Team builds also omit capabilities that it cannot sign.
+    appleTeamId: isIosPersonalTeamBuild ? personalTeamId! : "ARK85ZXQ4Z",
+    ...(!isIosPersonalTeamBuild
+      ? {
+          associatedDomains: [
+            `applinks:${variant.relyingParty}`,
+            `webcredentials:${variant.relyingParty}`,
+          ],
+        }
+      : {}),
     infoPlist: {
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
@@ -242,6 +253,9 @@ const config: ExpoConfig = {
     favicon: variant.assets.appIcon,
   },
   plugins: [
+    // Entitlements mods run last-registered-first. Register this before
+    // capability-producing plugins so Personal Team builds strip their output.
+    ...(isIosPersonalTeamBuild ? ["./plugins/withoutIosPersonalTeamCapabilities.cjs"] : []),
     "expo-asset",
     [
       "expo-font",
@@ -356,7 +370,6 @@ const config: ExpoConfig = {
     "./plugins/withAndroidModernAlertDialog.cjs",
     "./plugins/withAndroidPredictiveBackCompat.cjs",
     "./plugins/withAndroidTabletOrientation.cjs",
-    ...(isIosPersonalTeamBuild ? ["./plugins/withoutIosPersonalTeamCapabilities.cjs"] : []),
   ],
   extra: {
     appVariant: APP_VARIANT,

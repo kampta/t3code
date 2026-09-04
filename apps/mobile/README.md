@@ -57,6 +57,7 @@ entitlement, and native Sign in with Apple entitlement; builds without this opt-
 
 ```bash
 T3CODE_IOS_PERSONAL_TEAM=1 \
+T3CODE_IOS_PERSONAL_TEAM_ID=ABC1234567 \
 T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.t3code.dev \
 vp run ios:dev
 ```
@@ -71,9 +72,14 @@ The Personal Team equivalent also needs a unique bundle identifier:
 
 ```bash
 T3CODE_IOS_PERSONAL_TEAM=1 \
+T3CODE_IOS_PERSONAL_TEAM_ID=ABC1234567 \
 T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.t3code \
 vp run ios:release
 ```
+
+Find the 10-character Team ID in Xcode under **Settings > Accounts > Team > Manage
+Certificates**. Keep the same bundle identifier when reinstalling so iOS retains the app's local
+connections and preferences.
 
 Build and run the local iOS preview app:
 
