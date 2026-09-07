@@ -16,6 +16,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import type {
   CodexSettings,
   CustomModelSetting,
+  ProviderInventory,
   ServerProvider,
   ServerProviderState,
   ModelCapabilities,
@@ -30,8 +31,11 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
   AUTH_PROBE_TIMEOUT_MS,
+  AUTHORITATIVE_PROVIDER_INVENTORY,
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
+  STALE_PROVIDER_INVENTORY,
+  UNAVAILABLE_PROVIDER_INVENTORY,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -44,7 +48,11 @@ import {
 } from "./codexUsageLimits.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
+const INVENTORY_PROBE_TIMEOUT_MS = 6_000;
 const RATE_LIMITS_PROBE_TIMEOUT_MS = 3_000;
+// Preserve the full bootstrap/account budget, then leave room for optional
+// inventory discovery and orderly forced process cleanup.
+const PROVIDER_PROBE_TIMEOUT_MS = AUTH_PROBE_TIMEOUT_MS + INVENTORY_PROBE_TIMEOUT_MS + 4_000;
 
 type CodexRateLimitsProbe =
   | {
@@ -61,6 +69,7 @@ const CODEX_PRESENTATION = {
 } as const;
 
 export interface CodexAppServerProviderSnapshot {
+  readonly inventory: Pick<ProviderInventory, "models" | "skills">;
   readonly account: CodexSchema.V2GetAccountResponse;
   readonly rateLimits?: CodexRateLimitsProbe;
   readonly version: string | undefined;
@@ -330,6 +339,22 @@ const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
   return models;
 });
 
+const probeCodexInventoryRequest = Effect.fn("probeCodexInventoryRequest")(function* <A, E, R>(
+  label: "model" | "skill",
+  request: Effect.Effect<A, E, R>,
+) {
+  const result = yield* request.pipe(
+    Effect.timeoutOption(Duration.millis(INVENTORY_PROBE_TIMEOUT_MS)),
+  );
+  if (Option.isNone(result)) {
+    yield* Effect.logDebug(`Codex ${label} discovery timed out.`, {
+      timeoutMs: INVENTORY_PROBE_TIMEOUT_MS,
+    });
+    return { state: "stale" as const };
+  }
+  return { state: "authoritative" as const, value: result.value };
+});
+
 export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   return {
     clientInfo: {
@@ -391,6 +416,12 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(fu
       ),
     );
   const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child));
+  // Client-layer readers are registered after the process and therefore close
+  // first. Stop the process before those readers so a wedged RPC cannot hold
+  // scope teardown open while its stdout stream is still alive.
+  yield* Effect.addFinalizer(() =>
+    child.kill({ forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER }).pipe(Effect.ignore),
+  );
   const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
     Effect.provide(clientContext),
   );
@@ -416,6 +447,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const accountResponse = yield* client.request("account/read", {});
   if (!accountResponse.account && accountResponse.requiresOpenaiAuth) {
     return {
+      inventory: { models: "unavailable", skills: "unavailable" },
       account: accountResponse,
       version,
       models: appendCustomCodexModels([], input.customModels ?? []),
@@ -423,12 +455,15 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     } satisfies CodexAppServerProviderSnapshot;
   }
 
-  const [skillsResponse, models, rateLimits] = yield* Effect.all(
+  const [skillsDiscovery, modelsDiscovery, rateLimits] = yield* Effect.all(
     [
-      client.request("skills/list", {
-        cwds: [input.cwd],
-      }),
-      requestAllCodexModels(client),
+      probeCodexInventoryRequest(
+        "skill",
+        client.request("skills/list", {
+          cwds: [input.cwd],
+        }),
+      ),
+      probeCodexInventoryRequest("model", requestAllCodexModels(client)),
       // Usage is an enrichment: a failure or a slow answer degrades to "no
       // usage this probe" rather than costing the account and models.
       client.request("account/rateLimits/read", undefined).pipe(
@@ -453,13 +488,23 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   );
 
   return {
+    inventory: {
+      models: modelsDiscovery.state,
+      skills: skillsDiscovery.state,
+    },
     account: accountResponse,
     rateLimits,
     version,
     models: applyPreferredCodexDefaultModel(
-      appendCustomCodexModels(models, input.customModels ?? []),
+      appendCustomCodexModels(
+        modelsDiscovery.state === "authoritative" ? modelsDiscovery.value : [],
+        input.customModels ?? [],
+      ),
     ),
-    skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
+    skills:
+      skillsDiscovery.state === "authoritative"
+        ? parseCodexSkillsListResponse(skillsDiscovery.value, input.cwd)
+        : [],
   } satisfies CodexAppServerProviderSnapshot;
 });
 
@@ -493,6 +538,7 @@ const makePendingCodexProvider = (
         models,
         skills: [],
         probe: {
+          inventory: UNAVAILABLE_PROVIDER_INVENTORY,
           installed: false,
           version: null,
           status: "warning",
@@ -509,6 +555,7 @@ const makePendingCodexProvider = (
       models,
       skills: [],
       probe: {
+        inventory: STALE_PROVIDER_INVENTORY,
         installed: false,
         version: null,
         status: "warning",
@@ -579,6 +626,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       models: emptyModels,
       skills: [],
       probe: {
+        inventory: UNAVAILABLE_PROVIDER_INVENTORY,
         installed: false,
         version: null,
         status: "warning",
@@ -597,7 +645,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     environment: resolvedEnvironment,
   }).pipe(
     Effect.scoped,
-    Effect.timeoutOption(Duration.millis(AUTH_PROBE_TIMEOUT_MS)),
+    Effect.timeoutOption(Duration.millis(PROVIDER_PROBE_TIMEOUT_MS)),
     Effect.result,
   );
 
@@ -611,6 +659,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       models: emptyModels,
       skills: [],
       probe: {
+        inventory: installed ? STALE_PROVIDER_INVENTORY : UNAVAILABLE_PROVIDER_INVENTORY,
         installed,
         version: null,
         status: "error",
@@ -630,6 +679,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       models: emptyModels,
       skills: [],
       probe: {
+        inventory: STALE_PROVIDER_INVENTORY,
         installed: true,
         version: null,
         status: "error",
@@ -641,6 +691,14 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
 
   const snapshot = probeResult.success.value;
   const accountStatus = accountProbeStatus(snapshot.account);
+  const staleInventoryKinds = [
+    ...(snapshot.inventory.models === "stale" ? ["model"] : []),
+    ...(snapshot.inventory.skills === "stale" ? ["skill"] : []),
+  ];
+  const inventoryMessage =
+    staleInventoryKinds.length > 0
+      ? `Codex ${staleInventoryKinds.join(" and ")} discovery did not complete. T3 Code kept any previously discovered entries.`
+      : undefined;
   const usageLimits =
     snapshot.account.account?.type === "apiKey"
       ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })
@@ -671,11 +729,27 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       },
     ],
     probe: {
+      inventory: {
+        ...AUTHORITATIVE_PROVIDER_INVENTORY,
+        ...snapshot.inventory,
+      },
       installed: true,
       version: snapshot.version ?? null,
-      status: accountStatus.status,
+      // A completed account read establishes provider readiness. Model and
+      // skill discovery are replaceable metadata. Without a current or cached
+      // model, however, the clients cannot start a new Codex thread.
+      status:
+        accountStatus.status === "ready" &&
+        snapshot.inventory.models === "stale" &&
+        snapshot.models.length === 0
+          ? "warning"
+          : accountStatus.status,
       auth: accountStatus.auth,
-      ...(accountStatus.message ? { message: accountStatus.message } : {}),
+      ...(accountStatus.message
+        ? { message: accountStatus.message }
+        : inventoryMessage
+          ? { message: inventoryMessage }
+          : {}),
       usageLimits,
     },
   });

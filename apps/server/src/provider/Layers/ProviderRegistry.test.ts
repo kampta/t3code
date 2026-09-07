@@ -258,14 +258,27 @@ function hangingScopedSpawnerLayer(killCalls: Ref.Ref<number>) {
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make(() =>
       Effect.gen(function* () {
+        const killed = yield* Deferred.make<void>();
         const handle = ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(1),
           exitCode: Effect.never,
           isRunning: Effect.succeed(true),
-          kill: () => Ref.update(killCalls, (current) => current + 1),
+          kill: () =>
+            Deferred.isDone(killed).pipe(
+              Effect.flatMap((alreadyKilled) =>
+                alreadyKilled
+                  ? Effect.void
+                  : Ref.update(killCalls, (current) => current + 1).pipe(
+                      Effect.andThen(Deferred.succeed(killed, undefined)),
+                      Effect.asVoid,
+                    ),
+              ),
+            ),
           unref: Effect.succeed(Effect.void),
           stdin: Sink.drain,
-          stdout: Stream.never,
+          // Reproduces the real deadlock: protocol cleanup cannot finish until
+          // the process is killed, so process cleanup must run first.
+          stdout: Stream.never.pipe(Stream.ensuring(Deferred.await(killed))),
           stderr: Stream.never,
           all: Stream.never,
           getInputFd: () => Sink.drain,
@@ -292,6 +305,10 @@ function makeCodexProbeSnapshot(
   input: Partial<CodexAppServerProviderSnapshot> = {},
 ): CodexAppServerProviderSnapshot {
   return {
+    inventory: {
+      models: "authoritative",
+      skills: "authoritative",
+    },
     version: "1.0.0",
     account: {
       account: {
@@ -413,6 +430,40 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               input: { hint: "Describe the issue (optional)" },
             },
           ]);
+        }),
+      );
+
+      it.effect("reports stale model discovery without losing authentication", () =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.succeed(
+              makeCodexProbeSnapshot({
+                inventory: { models: "stale", skills: "authoritative" },
+                models: [],
+              }),
+            ),
+          );
+
+          assert.strictEqual(status.status, "warning");
+          assert.strictEqual(status.auth.status, "authenticated");
+          assert.strictEqual(status.inventory?.models, "stale");
+          assert.strictEqual(status.inventory?.skills, "authoritative");
+          assert.match(status.message ?? "", /model discovery did not complete/);
+        }),
+      );
+
+      it.effect("does not let the auth budget truncate the aggregate provider probe", () =>
+        Effect.gen(function* () {
+          const statusFiber = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.succeed(makeCodexProbeSnapshot()).pipe(Effect.delay("15 seconds")),
+          ).pipe(Effect.forkChild);
+
+          yield* Effect.yieldNow;
+          yield* TestClock.adjust("15 seconds");
+          yield* Effect.yieldNow;
+
+          const status = yield* Fiber.join(statusFiber);
+          assert.strictEqual(status.status, "ready");
         }),
       );
 
@@ -539,7 +590,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
 
           yield* Effect.yieldNow;
-          yield* TestClock.adjust("11 seconds");
+          yield* TestClock.adjust("21 seconds");
           yield* Effect.yieldNow;
 
           const status = yield* Fiber.join(statusFiber);
@@ -960,6 +1011,62 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               [customModel, ...cachedProvider.models],
             );
           }
+        });
+
+        it("retains only the Codex inventory fields marked stale", () => {
+          const previousSkill = {
+            name: "previous-skill",
+            path: "/skills/previous/SKILL.md",
+            enabled: true,
+          } as const;
+          const freshSkill = {
+            name: "fresh-skill",
+            path: "/skills/fresh/SKILL.md",
+            enabled: true,
+          } as const;
+          const previousProvider = {
+            ...cachedProvider,
+            slashCommands: [{ name: "previous-command" }],
+            skills: [previousSkill],
+          } satisfies ServerProvider;
+
+          const staleModels = mergeProviderSnapshot(previousProvider, {
+            ...refreshedProvider,
+            status: "warning",
+            inventory: {
+              models: "stale",
+              slashCommands: "authoritative",
+              skills: "authoritative",
+            },
+            models: [customModel],
+            slashCommands: [{ name: "fresh-command" }],
+            skills: [freshSkill],
+          });
+          assert.deepStrictEqual(staleModels.models, [customModel, ...cachedProvider.models]);
+          assert.strictEqual(staleModels.status, "ready");
+          assert.deepStrictEqual(staleModels.slashCommands, [{ name: "fresh-command" }]);
+          assert.deepStrictEqual(staleModels.skills, [freshSkill]);
+          assert.strictEqual(
+            mergeProviderSnapshot(previousProvider, {
+              ...staleModels,
+              status: "warning",
+              auth: { status: "unknown" },
+              models: [customModel],
+            }).status,
+            "ready",
+          );
+
+          const staleSkills = mergeProviderSnapshot(previousProvider, {
+            ...refreshedProvider,
+            inventory: {
+              models: "authoritative",
+              slashCommands: "authoritative",
+              skills: "stale",
+            },
+            skills: [],
+          });
+          assert.deepStrictEqual(staleSkills.models, refreshedProvider.models);
+          assert.deepStrictEqual(staleSkills.skills, [previousSkill]);
         });
 
         it("clears discovered models after sign-out, disable, uninstall, or empty discovery", () => {

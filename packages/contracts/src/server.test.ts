@@ -50,6 +50,17 @@ describe("ServerProvider", () => {
     expect(parsed.updateState).toBeUndefined();
   });
 
+  it("decodes provider inventory freshness", () => {
+    const inventory = {
+      models: "stale",
+      slashCommands: "authoritative",
+      skills: "unavailable",
+    } as const;
+    const parsed = decodeServerProvider({ ...baseProviderSnapshot, inventory });
+
+    expect(parsed.inventory).toEqual(inventory);
+  });
+
   it("defaults one-click update support when decoding older advisory snapshots", () => {
     const parsed = decodeServerProvider({
       instanceId: "codex",
