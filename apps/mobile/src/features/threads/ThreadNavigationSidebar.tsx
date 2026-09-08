@@ -24,6 +24,7 @@ import { AppText as Text } from "../../components/AppText";
 import { CompactBrandTitle } from "../../components/CompactBrandTitle";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
+import { SessionReaction } from "../../components/SessionReaction";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
@@ -1239,6 +1240,7 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={SessionReaction}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>
@@ -1298,6 +1300,7 @@ function ThreadNavigationSidebarPane(
               scrollEventThrottle={16}
               showsVerticalScrollIndicator={false}
               style={styles.threadList}
+              ListHeaderComponent={SessionReaction}
               ListEmptyComponent={listEmpty}
             />
           </GestureDetector>
