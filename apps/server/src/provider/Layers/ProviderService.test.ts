@@ -142,27 +142,28 @@ function makeFakeCodexAdapter(
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
-  const startSession = vi.fn((input: ProviderSessionStartInput) =>
-    Effect.sync(() => {
-      const now = "2026-01-01T00:00:00.000Z";
-      const session: ProviderSession = {
-        provider,
-        ...(input.providerInstanceId !== undefined
-          ? { providerInstanceId: input.providerInstanceId }
-          : {}),
-        status: "ready",
-        runtimeMode: input.runtimeMode,
-        threadId: input.threadId,
-        resumeCursor: input.resumeCursor ?? {
-          opaque: `resume-${String(input.threadId)}`,
-        },
-        cwd: input.cwd ?? process.cwd(),
-        createdAt: now,
-        updatedAt: now,
-      };
-      sessions.set(session.threadId, session);
-      return session;
-    }),
+  const startSession = vi.fn(
+    (input: ProviderSessionStartInput): Effect.Effect<ProviderSession, ProviderAdapterError> =>
+      Effect.sync(() => {
+        const now = "2026-01-01T00:00:00.000Z";
+        const session: ProviderSession = {
+          provider,
+          ...(input.providerInstanceId !== undefined
+            ? { providerInstanceId: input.providerInstanceId }
+            : {}),
+          status: "ready",
+          runtimeMode: input.runtimeMode,
+          threadId: input.threadId,
+          resumeCursor: input.resumeCursor ?? {
+            opaque: `resume-${String(input.threadId)}`,
+          },
+          cwd: input.cwd ?? process.cwd(),
+          createdAt: now,
+          updatedAt: now,
+        };
+        sessions.set(session.threadId, session);
+        return session;
+      }),
   );
 
   const sendTurn = vi.fn(
@@ -2166,7 +2167,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("stops stale sessions in other providers after a successful replacement start", () =>
+  it.effect("stops stale sessions in other providers when replacing a session", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
       const threadId = asThreadId("thread-provider-replacement");
@@ -3041,6 +3042,219 @@ citations.layer("ProviderServiceLive assistant citations", (it) => {
         prompts,
       );
       yield* provider.stopSession({ threadId });
+    }),
+  );
+});
+
+const switchPrimaryId = ProviderInstanceId.make("codex_personal");
+const switchSecondaryId = ProviderInstanceId.make("codex_work");
+const switchIsolatedId = ProviderInstanceId.make("codex_isolated");
+const switchPrimary = makeFakeCodexAdapter();
+const switchSecondary = makeFakeCodexAdapter();
+const switchIsolated = makeFakeCodexAdapter();
+const switchRegistry = makeStaticInstanceRegistry([
+  [switchPrimaryId, switchPrimary.adapter],
+  [switchSecondaryId, switchSecondary.adapter],
+  [switchIsolatedId, switchIsolated.adapter],
+]);
+const accountSwitching = makeProviderServiceLayer({
+  registry: {
+    ...switchRegistry,
+    getInstanceInfo: (instanceId) =>
+      switchRegistry.getInstanceInfo(instanceId).pipe(
+        Effect.map((info) => ({
+          ...info,
+          continuationIdentity: {
+            driverKind: CODEX_DRIVER,
+            continuationKey:
+              instanceId === switchIsolatedId ? "codex:home:isolated" : "codex:home:shared",
+          },
+        })),
+      ),
+  },
+});
+
+accountSwitching.layer("ProviderServiceLive account switching", (it) => {
+  it.effect("rejects incompatible homes before releasing the current session", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("account-switch-incompatible");
+      const input = { threadId, provider: CODEX_DRIVER, runtimeMode: "full-access" as const };
+      yield* provider.startSession(threadId, { ...input, providerInstanceId: switchPrimaryId });
+      switchPrimary.stopSession.mockClear();
+      switchIsolated.startSession.mockClear();
+      const result = yield* provider
+        .startSession(threadId, { ...input, providerInstanceId: switchIsolatedId })
+        .pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(result));
+      assert.equal(switchPrimary.stopSession.mock.calls.length, 0);
+      assert.equal(switchIsolated.startSession.mock.calls.length, 0);
+      assert.isTrue(yield* switchPrimary.hasSession(threadId));
+    }),
+  );
+
+  it.effect("releases the shared writer before switching accounts in either direction", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("account-switch-writer");
+      const unrelatedThread = asThreadId("account-switch-unrelated");
+      const input = { threadId, provider: CODEX_DRIVER, runtimeMode: "full-access" as const };
+      const original = yield* provider.startSession(threadId, {
+        ...input,
+        providerInstanceId: switchPrimaryId,
+      });
+      yield* provider.startSession(unrelatedThread, {
+        ...input,
+        threadId: unrelatedThread,
+        providerInstanceId: switchPrimaryId,
+      });
+
+      for (const [previous, next, nextId] of [
+        [switchPrimary, switchSecondary, switchSecondaryId],
+        [switchSecondary, switchPrimary, switchPrimaryId],
+      ] as const) {
+        const start = next.startSession.getMockImplementation()!;
+        next.startSession.mockImplementationOnce((request) =>
+          Effect.gen(function* () {
+            if (yield* previous.hasSession(threadId)) {
+              return yield* new ProviderAdapterRequestError({
+                provider: CODEX_DRIVER,
+                method: "thread/resume",
+                detail: "thread already has an active writer",
+              });
+            }
+            return yield* start(request);
+          }),
+        );
+        const switched = yield* provider.startSession(threadId, {
+          ...input,
+          providerInstanceId: nextId,
+          resumeCursor: original.resumeCursor,
+        });
+        assert.deepEqual(switched.resumeCursor, original.resumeCursor);
+        assert.equal(switched.providerInstanceId, nextId);
+        assert.isFalse(yield* previous.hasSession(threadId));
+        assert.isTrue(yield* switchPrimary.hasSession(unrelatedThread));
+      }
+    }),
+  );
+
+  it.effect("awaits the old account's shutdown before starting the new account", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("account-switch-drain");
+      const input = { threadId, provider: CODEX_DRIVER, runtimeMode: "full-access" as const };
+      const original = yield* provider.startSession(threadId, {
+        ...input,
+        providerInstanceId: switchPrimaryId,
+      });
+      const stopping = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const stop = switchPrimary.stopSession.getMockImplementation()!;
+      switchPrimary.stopSession.mockImplementationOnce((id) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(stopping, undefined);
+          yield* Deferred.await(release);
+          yield* stop(id);
+        }),
+      );
+      switchSecondary.startSession.mockClear();
+      const switching = yield* provider
+        .startSession(threadId, {
+          ...input,
+          providerInstanceId: switchSecondaryId,
+          resumeCursor: original.resumeCursor,
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(stopping);
+      const startsBeforeShutdown = switchSecondary.startSession.mock.calls.length;
+      yield* Deferred.succeed(release, undefined);
+      const switched = yield* Fiber.join(switching);
+      assert.equal(startsBeforeShutdown, 0);
+      assert.equal(switched.providerInstanceId, switchSecondaryId);
+    }),
+  );
+
+  it.effect("aborts the handoff when the old account cannot stop", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("account-switch-stop-failure");
+      const input = { threadId, provider: CODEX_DRIVER, runtimeMode: "full-access" as const };
+      const original = yield* provider.startSession(threadId, {
+        ...input,
+        providerInstanceId: switchPrimaryId,
+      });
+      const stopError = new ProviderAdapterRequestError({
+        provider: CODEX_DRIVER,
+        method: "stopSession",
+        detail: "Could not release writer",
+      });
+      switchPrimary.stopSession.mockReturnValueOnce(Effect.fail(stopError));
+      switchSecondary.startSession.mockClear();
+      const result = yield* provider
+        .startSession(threadId, {
+          ...input,
+          providerInstanceId: switchSecondaryId,
+          resumeCursor: original.resumeCursor,
+        })
+        .pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(result));
+      assert.equal(switchSecondary.startSession.mock.calls.length, 0);
+      assert.isTrue(yield* switchPrimary.hasSession(threadId));
+      const binding = yield* directory.getBinding(threadId);
+      assert.isTrue(Option.isSome(binding));
+      if (Option.isSome(binding)) assert.equal(binding.value.providerInstanceId, switchPrimaryId);
+    }),
+  );
+
+  it.effect("keeps the conversation resumable if the replacement fails to start", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("account-switch-start-failure");
+      const input = { threadId, provider: CODEX_DRIVER, runtimeMode: "full-access" as const };
+      const cwd = fixtureCwd("account-switch-retry");
+      const original = yield* provider.startSession(threadId, {
+        ...input,
+        cwd,
+        providerInstanceId: switchPrimaryId,
+      });
+      switchSecondary.startSession.mockReturnValueOnce(
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: CODEX_DRIVER,
+            method: "thread/resume",
+            detail: "Temporary startup failure",
+          }),
+        ),
+      );
+      const result = yield* provider
+        .startSession(threadId, {
+          ...input,
+          providerInstanceId: switchSecondaryId,
+          resumeCursor: original.resumeCursor,
+        })
+        .pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(result));
+      assert.isFalse(yield* switchPrimary.hasSession(threadId));
+      const binding = yield* directory.getBinding(threadId);
+      assert.isTrue(Option.isSome(binding));
+      if (Option.isSome(binding)) {
+        assert.equal(binding.value.providerInstanceId, switchPrimaryId);
+        assert.deepEqual(binding.value.resumeCursor, original.resumeCursor);
+      }
+      // The reactor's retry has no live old session from which to read a cursor.
+      const retried = yield* provider.startSession(threadId, {
+        ...input,
+        providerInstanceId: switchSecondaryId,
+      });
+      assert.deepEqual(retried.resumeCursor, original.resumeCursor);
+      assert.equal(retried.cwd, cwd);
+      assert.deepEqual(
+        switchSecondary.startSession.mock.lastCall?.[0].resumeCursor,
+        original.resumeCursor,
+      );
     }),
   );
 });
