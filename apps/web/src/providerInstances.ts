@@ -13,7 +13,6 @@
  * @module providerInstances
  */
 import {
-  DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   resolveProviderInstanceEnabled,
   type ModelSelection,
@@ -29,6 +28,7 @@ import {
   resolveProviderInstanceDisplayName,
   shouldShowInstanceBadge,
 } from "@t3tools/client-runtime/state/provider-instance-display";
+import { DEFAULT_PROVIDER_DRIVER_KIND } from "@t3tools/shared/model";
 
 export { normalizeProviderAccentColor, shouldShowInstanceBadge };
 
@@ -222,8 +222,8 @@ function getProviderInstanceEntry(
 }
 
 /**
- * Default model slug for a specific instance: its declared built-in default,
- * then its first built-in model, then any model it reports, then the driver-level default. Custom
+ * Default model slug for a specific instance: its declared current built-in default,
+ * then its first current built-in model, then any current model it reports. Custom
  * instances can serve a different model list than the default instance of
  * the same driver kind, so the lookup must be instance-scoped rather than
  * kind-scoped.
@@ -234,23 +234,42 @@ export function getDefaultProviderInstanceModel(
 ): string | undefined {
   const entry = getProviderInstanceEntry(providers, instanceId);
   if (!entry) return undefined;
+  const currentModels = entry.models.filter((model) => !model.isLegacy);
   return (
-    entry.models.find((model) => model.isDefault && !model.isCustom)?.slug ??
-    entry.models.find((model) => !model.isCustom)?.slug ??
-    entry.models[0]?.slug ??
-    DEFAULT_MODEL_BY_PROVIDER[entry.driverKind]
+    currentModels.find((model) => model.isDefault && !model.isCustom)?.slug ??
+    currentModels.find((model) => !model.isCustom)?.slug ??
+    currentModels[0]?.slug
   );
 }
 
 const isSelectableProviderInstanceEntry = (entry: ProviderInstanceEntry): boolean =>
   entry.enabled && entry.isAvailable;
 
+const preferredDefaultInstanceId = defaultInstanceIdForDriver(DEFAULT_PROVIDER_DRIVER_KIND);
+
+function findPreferredProviderInstanceEntry(
+  entries: ReadonlyArray<ProviderInstanceEntry>,
+  predicate: (entry: ProviderInstanceEntry) => boolean,
+): ProviderInstanceEntry | undefined {
+  return (
+    entries.find(
+      (entry) =>
+        entry.instanceId === preferredDefaultInstanceId &&
+        entry.driverKind === DEFAULT_PROVIDER_DRIVER_KIND &&
+        predicate(entry),
+    ) ??
+    entries.find(
+      (entry) => entry.driverKind === DEFAULT_PROVIDER_DRIVER_KIND && predicate(entry),
+    ) ??
+    entries.find(predicate)
+  );
+}
+
 /**
  * Resolve an exact stored instance when it remains enabled and available.
- * Otherwise choose a deterministic fallback that can plausibly start now:
- * ready first, then a non-error probe result. An errored provider is retained
- * only when it was explicitly requested; it is never invented as a new-user
- * default.
+ * Otherwise choose a deterministic ready fallback with a current model. Warning and errored
+ * providers are retained only when explicitly requested; neither is invented
+ * as a new-user default.
  */
 export function resolveSelectableProviderInstanceEntry(
   entries: ReadonlyArray<ProviderInstanceEntry>,
@@ -262,17 +281,18 @@ export function resolveSelectableProviderInstanceEntry(
       return requested;
     }
   }
-  return (
-    entries.find(isProviderInstancePickerReady) ??
-    entries.find((entry) => isSelectableProviderInstanceEntry(entry) && entry.status !== "error")
+  return findPreferredProviderInstanceEntry(
+    entries,
+    (entry) =>
+      isProviderInstancePickerReady(entry) && entry.models.some((model) => !model.isLegacy),
   );
 }
 
 /**
  * Resolve the routing key for a selection that may reference an instance
  * id that no longer exists (e.g. a persisted thread selection after the
- * user deleted the custom instance). Returns a ready or non-error fallback,
- * or `undefined` when no provider can safely become a new selection.
+ * user deleted the custom instance). Returns a ready fallback, or `undefined`
+ * when no provider can safely become a new selection.
  */
 export function resolveSelectableProviderInstance(
   providers: ReadonlyArray<ServerProvider>,

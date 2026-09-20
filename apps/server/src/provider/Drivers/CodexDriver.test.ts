@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { vi } from "vite-plus/test";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
@@ -35,6 +36,9 @@ import {
 } from "../providerMaintenance.ts";
 import { CodexDriver } from "./CodexDriver.ts";
 import * as ProviderCredentialStore from "../ProviderCredentialStore.ts";
+import * as CodexProvider from "../Layers/CodexProvider.ts";
+import { mergeProviderSnapshot } from "../Layers/ProviderRegistry.ts";
+import { AUTHORITATIVE_PROVIDER_INVENTORY, buildServerProvider } from "../providerSnapshot.ts";
 
 const testLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-codex-driver-maintenance-",
@@ -75,6 +79,153 @@ const noSpawn = ChildProcessSpawner.make(() =>
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(testLayer)("CodexDriver", (it) => {
+  it.effect(
+    "replaces cached models with authoritative managed ChatGPT catalogs despite stale native discovery",
+    () =>
+      Effect.gen(function* () {
+        const instanceId = ProviderInstanceId.make("managed-catalog");
+        const credentials = new Map<string, Uint8Array>();
+        const secrets = ServerSecretStore.of({
+          get: (key) => Effect.sync(() => Option.fromUndefinedOr(credentials.get(key))),
+          set: (key, value) =>
+            Effect.sync(() => {
+              credentials.set(key, value);
+            }),
+          remove: (key) =>
+            Effect.sync(() => {
+              credentials.delete(key);
+            }),
+          create: () => Effect.die("unused"),
+          getOrCreateRandom: () => Effect.die("unused"),
+        });
+        const native = buildServerProvider({
+          presentation: {
+            displayName: "Codex",
+            showInteractionModeToggle: true,
+            reportsContextWindow: true,
+          },
+          enabled: true,
+          checkedAt: "2026-09-30T00:00:00.000Z",
+          models: [],
+          skills: [],
+          probe: {
+            inventory: { ...AUTHORITATIVE_PROVIDER_INVENTORY, models: "stale" },
+            installed: true,
+            version: "0.156.1",
+            status: "warning",
+            auth: { status: "authenticated" },
+            message: "Codex model discovery did not complete.",
+          },
+        });
+        const probe = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            vi
+              .spyOn(CodexProvider, "checkCodexProviderStatus")
+              .mockImplementation(() => Effect.succeed(native)),
+          ),
+          (spy) => Effect.sync(() => spy.mockRestore()),
+        );
+        let catalog = [{ slug: "current", display_name: "Current", visibility: "list" }];
+        let catalogAvailable = true;
+        const http = HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify({ models: catalog }), {
+                status: catalogAvailable ? 200 : 503,
+              }),
+            ),
+          ),
+        );
+        yield* Effect.gen(function* () {
+          const store = yield* ProviderCredentialStore.make("codex-chatgpt", instanceId);
+          const json = yield* encodeCredentials({
+            clientId: "oaiapp_test",
+            accessToken: "dummy-owned-access",
+            refreshToken: "dummy-refresh",
+            expiresAt: Number.MAX_SAFE_INTEGER,
+            earliestRefreshAt: null,
+            scopes: ["chatgpt.tokens.use.direct"],
+            subject: "test-user",
+            email: null,
+          });
+          yield* store.set(new TextEncoder().encode(json));
+          const installation = yield* CodexInstallation;
+          const serverConfig = yield* ServerConfig;
+          const executable = {
+            executablePath: "/user/bin/codex",
+            managedVersionDirectory: null,
+            source: "local" as const,
+            version: "0.156.1",
+          };
+          const instance = yield* CodexDriver.create({
+            instanceId,
+            displayName: "Managed account",
+            enabled: true,
+            environment: [],
+            config: {
+              ...CodexDriver.defaultConfig(),
+              setupMode: "managed",
+              homePath: NodePath.join(serverConfig.stateDir, "managed-catalog-home"),
+            },
+          }).pipe(
+            Effect.provideService(
+              CodexInstallation,
+              CodexInstallation.of({
+                ...installation,
+                resolve: () => Effect.succeed(executable),
+                acquire: () => Effect.succeed(executable),
+              }),
+            ),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+            Effect.provideService(HttpClient.HttpClient, http),
+          );
+          const refreshed = yield* instance.snapshot.refresh;
+          expect(refreshed.message).toBeUndefined();
+          const capabilities = {
+            optionDescriptors: [
+              {
+                id: "reasoningEffort",
+                label: "Reasoning",
+                type: "select" as const,
+                options: [{ id: "medium", label: "Medium" }],
+              },
+            ],
+          };
+          const previous = {
+            ...refreshed,
+            models: [
+              { slug: "retired", name: "Retired", isCustom: false, capabilities },
+              { slug: "current", name: "Cached current", isCustom: false, capabilities },
+            ],
+          };
+          const merged = mergeProviderSnapshot(previous, refreshed);
+          expect(refreshed.inventory?.models).toBe("authoritative");
+          expect(refreshed.status).toBe("ready");
+          expect(merged.models.map((model) => model.slug)).toEqual(["current"]);
+          expect(merged.models[0]?.capabilities).toEqual(capabilities);
+          catalog = [];
+          probe.mockImplementation(() =>
+            Effect.succeed({
+              ...native,
+              status: "ready",
+              inventory: AUTHORITATIVE_PROVIDER_INVENTORY,
+            }),
+          );
+          const empty = yield* instance.snapshot.refresh;
+          expect(empty.inventory?.models).toBe("authoritative");
+          expect(empty.status).toBe("warning");
+          expect(mergeProviderSnapshot(merged, empty).models).toEqual([]);
+          catalogAvailable = false;
+          const failed = yield* instance.snapshot.refresh;
+          const failedWithCache = mergeProviderSnapshot(merged, failed);
+          expect(failedWithCache.status).toBe("error");
+          expect(failedWithCache.auth.status).toBe("authenticated");
+          expect(failedWithCache.models.map((model) => model.slug)).toEqual(["current"]);
+        }).pipe(Effect.provideService(ServerSecretStore, secrets));
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("disconnect refreshes a restored managed account while its auth flow is idle", () =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("restored-managed-account");
@@ -169,6 +320,16 @@ it.layer(testLayer)("CodexDriver", (it) => {
         expect(after.auth.email).toBeUndefined();
         expect(after.installed).toBe(true);
         expect(after.models).toEqual([]);
+        const cached = {
+          ...restored,
+          models: [{ slug: "cached", name: "Cached", isCustom: false, capabilities: null }],
+          skills: [{ name: "cached", path: "/cached", enabled: true }],
+          slashCommands: [{ name: "cached" }],
+        };
+        const merged = mergeProviderSnapshot(cached, after);
+        expect(merged.models).toEqual([]);
+        expect(merged.skills).toEqual([]);
+        expect(merged.slashCommands).toEqual([]);
         expect(Option.isNone(yield* store.get)).toBe(true);
       }).pipe(
         Effect.provideService(ServerSecretStore, secrets),

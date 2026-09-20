@@ -1093,7 +1093,7 @@ describe("resolveComposerProviderSelection", () => {
         auth: { status: "authenticated" },
         version: null,
         checkedAt: now,
-        models: [],
+        models: [{ slug: "test-default", name: "Test default", isCustom: false, capabilities: {} }],
         slashCommands: [],
         skills: [],
         ...overrides,
@@ -1232,6 +1232,50 @@ describe("resolveComposerProviderSelection", () => {
     ).toEqual({ enabled: false, interactionMode: "default" });
   });
 
+  it("prefers ready Codex when no provider has been selected", () => {
+    const selection = resolveComposerProviderSelection({
+      entries: [entry("claudeAgent"), entry("codex")],
+      candidateInstanceIds: [null],
+      lockedProvider: null,
+      lockedInstanceId: null,
+    });
+
+    expect(selection.selectedProviderEntry?.instanceId).toBe(ProviderInstanceId.make("codex"));
+    expect(selection.requestedDriverKind).toBe(ProviderDriverKind.make("codex"));
+  });
+
+  it.each([
+    { models: [] },
+    {
+      models: [
+        {
+          slug: "retired-model",
+          name: "Retired",
+          isCustom: false,
+          isLegacy: true,
+          capabilities: {},
+        },
+      ],
+    },
+  ])("falls back from an empty or retired Codex catalog in a new composer (%j)", ({ models }) => {
+    const codex = entry("codex", "codex", { models });
+    const claude = entry("claudeAgent");
+    const selection = resolveComposerProviderSelection({
+      entries: [codex, claude],
+      candidateInstanceIds: [null],
+      lockedProvider: null,
+      lockedInstanceId: null,
+    });
+    expect(selection.selectedProviderEntry?.instanceId).toBe(claude.instanceId);
+    const explicit = resolveComposerProviderSelection({
+      entries: [codex, claude],
+      candidateInstanceIds: [codex.instanceId],
+      lockedProvider: null,
+      lockedInstanceId: null,
+    });
+    expect(explicit.selectedProviderEntry?.instanceId).toBe(codex.instanceId);
+  });
+
   it("uses the fallback provider's plan capability after the draft's instance is disabled", () => {
     const disabledEntry = entry("antigravity", "antigravity", {
       enabled: false,
@@ -1303,9 +1347,12 @@ describe("resolveComposerProviderSelection", () => {
   });
 
   it("blocks saved model sends until Antigravity loads its account catalog", () => {
-    expect(getAntigravitySendBlockReason(entry("antigravity").snapshot, "gemini-pro")).toBe(
-      "Refresh Antigravity models in provider settings before sending.",
-    );
+    expect(
+      getAntigravitySendBlockReason(
+        entry("antigravity", "antigravity", { models: [] }).snapshot,
+        "gemini-pro",
+      ),
+    ).toBe("Refresh Antigravity models in provider settings before sending.");
   });
 
   it("blocks an empty Antigravity selection after the catalog has loaded", () => {

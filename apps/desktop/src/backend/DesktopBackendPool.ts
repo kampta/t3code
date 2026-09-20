@@ -300,6 +300,8 @@ export const layer = Layer.effect(
           ),
         ),
       onShutdown: () => desktopWindow.handleBackendNotReady,
+      onStartupFailure: (message) =>
+        electronDialog.showErrorBox("T3 Code backend couldn't start", message),
       onPreflightFailed: handlePrimaryPreflightFailure,
     });
 

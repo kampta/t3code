@@ -49,6 +49,7 @@ import {
   type DesktopTelemetryControlMessage as DesktopTelemetryControlMessageValue,
 } from "@t3tools/contracts";
 import { waitForHttpReady as waitForHttpReadyShared } from "@t3tools/shared/httpReadiness";
+import { SERVER_OWNERSHIP_CONFLICT_EXIT_CODE } from "@t3tools/shared/serverExitCodes";
 
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
@@ -295,6 +296,7 @@ export interface BackendInstanceSpec {
   // between "fired onReady" and "currentConfig already advanced".
   readonly onReady?: (httpBaseUrl: URL) => Effect.Effect<void>;
   readonly onShutdown?: () => Effect.Effect<void>;
+  readonly onStartupFailure?: (message: string) => Effect.Effect<void>;
   // Fired once when a fatal or bounded preflight failure has exhausted its
   // retries. Returns true when the callback changed configuration and the
   // manager should resolve once more; false stops the failed instance.
@@ -828,7 +830,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
 
         const finalizeRun = Effect.fn("desktop.backendInstance.finalizeRun")(function* (
           reason: string,
+          exitCode?: number,
         ) {
+          const ownershipConflict = exitCode === SERVER_OWNERSHIP_CONFLICT_EXIT_CODE;
           yield* mutex.withPermits(1)(
             Effect.gen(function* () {
               const { isCurrentRun, nextState, pid, exitObserved, stopRequested, wasReady } =
@@ -866,6 +870,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                       ...latest,
                       active: Option.none<ActiveBackendRun>(),
                       ready: false,
+                      ...(ownershipConflict ? { desiredRunning: false } : {}),
                     };
                     return [
                       {
@@ -894,6 +899,14 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                 }
                 if (wasReady) {
                   yield* spec.onShutdown?.() ?? Effect.void;
+                }
+                if (ownershipConflict) {
+                  const message =
+                    "Another T3 Code server owns this state directory. Close that server before starting this environment again.";
+                  yield* logInstanceError("backend state directory is already owned; stopping", {
+                    reason: message,
+                  });
+                  yield* spec.onStartupFailure?.(message) ?? Effect.void;
                 }
               }
 
@@ -971,7 +984,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           Scope.provide(runScope),
           Effect.matchEffect({
             onFailure: (error) => finalizeRun(error.message),
-            onSuccess: (exit) => finalizeRun(exit.reason),
+            onSuccess: (exit) => finalizeRun(exit.reason, Option.getOrUndefined(exit.code)),
           }),
           Effect.ensuring(Scope.close(runScope, Exit.void).pipe(Effect.ignore)),
         );

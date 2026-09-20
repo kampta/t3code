@@ -44,13 +44,15 @@ const makeDesktopClerkLayer = (
     openSystemSettings: () => Effect.succeed(false),
     copyText: () => Effect.void,
   },
+  isDevelopmentBuild = isDevelopment,
 ) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
     stateDir: "/tmp/t3-state",
     isDevelopment,
+    isDevelopmentBuild,
     appDataDirectory: "/tmp/app-data",
-    userDataDirName: isDevelopment ? "t3code-dev" : "t3code",
-    legacyUserDataDirName: isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)",
+    userDataDirName: isDevelopmentBuild ? "t3code-dev" : "t3code",
+    legacyUserDataDirName: isDevelopmentBuild ? "T3 Code (Dev)" : "T3 Code (Alpha)",
     path: { join: (...parts: ReadonlyArray<string>) => parts.join("/") },
   } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
 
@@ -216,7 +218,7 @@ describe("DesktopClerk", () => {
 });
 
 it.effect(
-  "provider auth deep links navigate and reveal the running desktop without handling Clerk URLs",
+  "provider auth deep links navigate and reveal the packaged Dev desktop without handling Clerk URLs",
   () => {
     storageMock.mockReturnValue(storageAdapter);
     createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
@@ -254,7 +256,7 @@ it.effect(
       assert.equal(event.preventDefault.mock.calls.length, 1);
     }).pipe(
       Effect.scoped,
-      Effect.provide(makeDesktopClerkLayer()),
+      Effect.provide(makeDesktopClerkLayer(false, [], undefined, true)),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
     );
@@ -262,7 +264,7 @@ it.effect(
 );
 
 for (const entry of ["startup", "open-url"] as const) {
-  it.effect(`receives hosted web sign-in through the desktop ${entry} handler`, () =>
+  it.effect(`receives hosted web sign-in through the packaged Dev desktop ${entry} handler`, () =>
     Effect.gen(function* () {
       storageMock.mockReturnValue(storageAdapter);
       createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
@@ -331,7 +333,7 @@ for (const entry of ["startup", "open-url"] as const) {
         assert.strictEqual(delivery?.flowId, request.flowId);
         assert.strictEqual(delivery?.returnUrl, request.returnUrl);
       }).pipe(
-        Effect.provide(makeDesktopClerkLayer(true, [], shell)),
+        Effect.provide(makeDesktopClerkLayer(false, [], shell, true)),
         Effect.provideService(HostProcessArguments, entry === "startup" ? ["t3", link] : ["t3"]),
         Effect.provideService(ElectronApp.ElectronApp, electronApp),
         Effect.provideService(

@@ -21,6 +21,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { SERVER_OWNERSHIP_CONFLICT_EXIT_CODE } from "@t3tools/shared/serverExitCodes";
 
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopApp from "../app/DesktopApp.ts";
@@ -123,6 +124,7 @@ interface MakeInstanceInput {
   readonly backendOutputLog?: Partial<DesktopObservability.DesktopBackendOutputLogShape>;
   readonly onReady?: Effect.Effect<void>;
   readonly onShutdown?: Effect.Effect<void>;
+  readonly onStartupFailure?: (message: string) => Effect.Effect<void>;
   readonly onPreflightFailed?: (
     failure: DesktopBackendManager.PreflightFailure,
   ) => Effect.Effect<boolean>;
@@ -184,6 +186,7 @@ function makeTestInstance(input: MakeInstanceInput) {
     configResolve: input.configResolve ?? Effect.succeed(input.config ?? baseConfig),
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
+    ...(input.onStartupFailure ? { onStartupFailure: input.onStartupFailure } : {}),
     ...(input.onPreflightFailed ? { onPreflightFailed: input.onPreflightFailed } : {}),
   });
 
@@ -1154,6 +1157,39 @@ describe("DesktopBackendManager", () => {
         assert.equal(yield* Queue.take(startedPids), 123);
         assert.equal(shutdownCount, 0);
       }),
+    ),
+  );
+
+  it.effect("surfaces state ownership conflicts without restarting the refused backend", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const starts = yield* Queue.unbounded<number>();
+        const surfaced = yield* Queue.unbounded<string>();
+        const instance = yield* makeTestInstance({
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.succeed(
+                makeProcess({
+                  exitCode: Queue.offer(starts, 123).pipe(
+                    Effect.as(ChildProcessSpawner.ExitCode(SERVER_OWNERSHIP_CONFLICT_EXIT_CODE)),
+                  ),
+                }),
+              ),
+            ),
+          ),
+          httpClientLayer: httpClientLayer(() => Effect.never),
+          onStartupFailure: (message) => Queue.offer(surfaced, message).pipe(Effect.asVoid),
+        });
+        yield* instance.start;
+        assert.equal(yield* Queue.take(starts), 123);
+        assert.include(yield* Queue.take(surfaced), "owns this state directory");
+        const snapshot = yield* instance.snapshot;
+        assert.equal(snapshot.desiredRunning, false);
+        assert.equal(snapshot.restartScheduled, false);
+        yield* TestClock.adjust(Duration.seconds(10));
+        assert.equal(yield* Queue.size(starts), 0);
+      }).pipe(Effect.provide(TestClock.layer())),
     ),
   );
 

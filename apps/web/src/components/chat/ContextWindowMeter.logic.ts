@@ -3,10 +3,7 @@ import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
   isClaudeResumeCompactionQuestion,
 } from "@t3tools/shared/claudeCompaction";
-import {
-  resolveSelectableProviderInstanceEntry,
-  type ProviderInstanceEntry,
-} from "../../providerInstances";
+import { isProviderInstancePickerReady, type ProviderInstanceEntry } from "../../providerInstances";
 import { getTriggerDisplayModelName, type ModelEsque } from "./providerIconUtils";
 
 const CLAUDE_RESUME_COMPACTION_MINUTES = 70;
@@ -37,9 +34,13 @@ export function hasAvailableCompactionProvider(input: {
       )
     : driverProviders;
 
-  return providerSupportsManualCompaction(
-    resolveSelectableProviderInstanceEntry(compatibleProviders, input.instanceId ?? undefined),
-  );
+  // Compaction continues existing history and does not need a new model selection.
+  const provider =
+    compatibleProviders.find(
+      (provider) =>
+        provider.instanceId === input.instanceId && provider.enabled && provider.isAvailable,
+    ) ?? compatibleProviders.find(isProviderInstancePickerReady);
+  return providerSupportsManualCompaction(provider);
 }
 
 export function hasDismissedResumeCompaction(

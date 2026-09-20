@@ -138,7 +138,8 @@ ssh user@example.com 'sh -lc "command -v claude codex"'
 
 If SSH reconnecting fails after an app update, retry the launch once. Removing
 the connection stops a server that T3 Code launched; a server that was already
-running is left alone.
+running is left alone. Closing only the forwarded tunnel leaves a
+launcher-managed server running so a later connection can reuse it.
 
 For Antigravity's Google callback on a remote host, see
 [remote sign-in](./providers-antigravity.md#sign-in-from-a-remote-device).

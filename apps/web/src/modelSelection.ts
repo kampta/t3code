@@ -321,7 +321,8 @@ export function resolveAppModelSelectionForInstance(
       return unavailableSelection;
     }
   }
-  return options.find((option) => option.isDefault)?.slug ?? options[0]?.slug ?? null;
+  const currentOptions = options.filter((option) => !option.isLegacy && !option.isUnavailable);
+  return currentOptions.find((option) => option.isDefault)?.slug ?? currentOptions[0]?.slug ?? null;
 }
 
 /**

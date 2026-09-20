@@ -1,6 +1,8 @@
 # Product analytics
 
-The server owns PostHog delivery, opt-out, and identity for every connected client.
+The server owns PostHog delivery, opt-in, and identity for every connected client.
+Telemetry is disabled by default and is enabled with
+`T3CODE_TELEMETRY_ENABLED=true`.
 [Identity selection](../../apps/server/src/telemetry/Identify.ts) hashes an available
 provider account ID, falling back to an installation-scoped ID. This identity can
 span several clients; it does not identify a browser session. Clients do not load
