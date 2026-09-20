@@ -23,6 +23,10 @@ import {
 import { codexContinuationIdentity } from "./CodexHomeLayout.ts";
 import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 import { HttpClient } from "effect/http";
+import {
+  AUTHORITATIVE_PROVIDER_INVENTORY,
+  UNAVAILABLE_PROVIDER_INVENTORY,
+} from "@t3tools/provider-core/server/snapshotProbe";
 const DRIVER = ProviderDriverKind.make("codex");
 
 export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(function* (
@@ -51,7 +55,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
     homePath: runtime.homeLayout.sharedHomePath,
     shadowHomePath: runtime.homeLayout.mode === "authOverlay" ? runtime.homePath : null,
   };
-  const pending = makePendingCodexProvider({ ...config, customModels: [] }).pipe(
+  const pending = makePendingCodexProvider({ ...config, enabled, customModels: [] }).pipe(
     Effect.map((draft) =>
       stamp({
         ...draft,
@@ -70,6 +74,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
         ...base,
         installed: false,
         models: [],
+        inventory: UNAVAILABLE_PROVIDER_INVENTORY,
         message: "Set up Codex to get started.",
         auth: { status: "unauthenticated" as const },
       };
@@ -80,6 +85,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
         installed: true,
         version: executable.value.version,
         models: [],
+        inventory: UNAVAILABLE_PROVIDER_INVENTORY,
         message:
           "Signed in with ChatGPT, but token sharing is disabled. Sign in again and enable token sharing, or use another provider.",
         auth: {
@@ -95,6 +101,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
         version: executable.value.version,
         models: [],
         message: "Sign in with ChatGPT to use Codex.",
+        inventory: UNAVAILABLE_PROVIDER_INVENTORY,
         auth: { status: "unauthenticated" as const },
       };
     const usageLimits = {
@@ -128,7 +135,34 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
             effective.environment.ACCESS_TOKEN!,
             draft.models,
           ).pipe(Effect.provideService(HttpClient.HttpClient, http));
-          return { ...draft, models };
+          const recoveredModelDiscovery =
+            draft.status === "warning" &&
+            draft.inventory?.models === "stale" &&
+            draft.models.length === 0 &&
+            models.length > 0;
+          return {
+            ...draft,
+            inventory: {
+              ...AUTHORITATIVE_PROVIDER_INVENTORY,
+              ...draft.inventory,
+              models: "authoritative" as const,
+            },
+            models,
+            ...(models.length === 0 && draft.status !== "error"
+              ? {
+                  status: "warning" as const,
+                  message: "No ChatGPT models are available for this account.",
+                }
+              : recoveredModelDiscovery
+                ? {
+                    status: "ready" as const,
+                    message:
+                      draft.inventory?.skills === "stale"
+                        ? "Codex skill discovery did not complete. T3 Code kept any previously discovered entries."
+                        : undefined,
+                  }
+                : {}),
+          };
         }),
       ),
       Effect.map((draft) =>
@@ -165,8 +199,12 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
           Effect.map((current) => ({
             ...base,
             installed: true,
+            status: "error" as const,
             version: executable.value.version,
             models: [],
+            ...(Option.isSome(current) && current.value.scopes.includes("chatgpt.tokens.use.direct")
+              ? {}
+              : { inventory: UNAVAILABLE_PROVIDER_INVENTORY }),
             auth: {
               status:
                 Option.isSome(current) && current.value.scopes.includes("chatgpt.tokens.use.direct")

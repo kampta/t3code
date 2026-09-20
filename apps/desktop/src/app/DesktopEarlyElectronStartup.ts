@@ -14,8 +14,10 @@ import {
   resolveDesktopStateDir,
   type JoinPath,
 } from "./DesktopStatePaths.ts";
+import { isDevelopmentDesktopVersion } from "../updates/updateChannels.ts";
 
 interface EarlyDesktopSettingsInput {
+  readonly appVersion: string;
   readonly env: NodeJS.ProcessEnv;
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
@@ -46,10 +48,15 @@ const EarlyDesktopSettingsJson = fromLenientJson(
 );
 const decodeEarlyDesktopSettingsJson = Schema.decodeSync(EarlyDesktopSettingsJson);
 
-const isDevelopmentEnvironment = (env: NodeJS.ProcessEnv): boolean =>
-  trimNonEmpty(env.VITE_DEV_SERVER_URL) !== null;
+const isDevelopmentEnvironment = (input: {
+  readonly appVersion: string;
+  readonly env: NodeJS.ProcessEnv;
+}): boolean =>
+  trimNonEmpty(input.env.VITE_DEV_SERVER_URL) !== null ||
+  isDevelopmentDesktopVersion(input.appVersion);
 
 function resolveEarlyDesktopSettingsPath(input: {
+  readonly appVersion: string;
   readonly env: NodeJS.ProcessEnv;
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
@@ -62,7 +69,7 @@ function resolveEarlyDesktopSettingsPath(input: {
   });
   const stateDir = resolveDesktopStateDir({
     baseDir,
-    isDevelopment: isDevelopmentEnvironment(input.env),
+    isDevelopment: isDevelopmentEnvironment(input),
     joinPath: input.joinPath,
     t3Home,
   });
@@ -85,7 +92,7 @@ export function resolveEarlyLinuxElectronOptions(
   input: EarlyLinuxElectronOptionsInput,
 ): EarlyLinuxElectronOptions {
   const preference = resolveEarlyLinuxPasswordStorePreference(input);
-  const isDevelopment = isDevelopmentEnvironment(input.env);
+  const isDevelopment = isDevelopmentEnvironment(input);
   return {
     isDevelopment,
     linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",

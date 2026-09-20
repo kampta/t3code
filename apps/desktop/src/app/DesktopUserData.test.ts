@@ -18,7 +18,7 @@ it.effect("identifies a failed source read and preserves its cause", () => {
   return Effect.gen(function* () {
     const error = yield* resolveUserDataPath({
       appDataDirectory: "/profiles",
-      isDevelopment: false,
+      isDevelopmentBuild: false,
       platform: "win32",
     }).pipe(Effect.flip);
     assert.equal(error.operation, "read");
@@ -53,7 +53,7 @@ it.effect.each(["t3code", "T3 Code (Alpha)"])(
       yield* fs.writeFileString(path.join(source, "IndexedDB", "LOCK"), "V1 owns this database");
       yield* resolveUserDataPath({
         appDataDirectory: directory,
-        isDevelopment: false,
+        isDevelopmentBuild: false,
         platform: "win32",
       });
       assert.equal(yield* fs.readFileString(path.join(destination, "Local State")), state);
@@ -62,7 +62,7 @@ it.effect.each(["t3code", "T3 Code (Alpha)"])(
       yield* fs.writeFileString(path.join(destination, "Local State"), "existing V2 state");
       yield* resolveUserDataPath({
         appDataDirectory: directory,
-        isDevelopment: false,
+        isDevelopmentBuild: false,
         platform: "win32",
       });
       assert.equal(
@@ -70,4 +70,21 @@ it.effect.each(["t3code", "T3 Code (Alpha)"])(
         "existing V2 state",
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("gives packaged dev builds the dev profile without requiring Vite", () =>
+  Effect.gen(function* () {
+    const userDataPath = yield* resolveUserDataPath({
+      appDataDirectory: "/profiles",
+      isDevelopmentBuild: true,
+      platform: "darwin",
+    });
+    assert.equal(userDataPath, "/profiles/t3code-dev");
+  }).pipe(
+    Effect.provideService(
+      FileSystem.FileSystem,
+      FileSystem.makeNoop({ exists: () => Effect.succeed(false) }),
+    ),
+    Effect.provide(NodeServices.layer),
+  ),
 );

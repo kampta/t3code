@@ -1,12 +1,14 @@
 import type { MenuAction } from "@react-native-menu/menu";
-import type {
-  ModelCapabilities,
-  ModelSelection,
-  RuntimeMode,
-  ServerConfig as T3ServerConfig,
+import {
+  defaultInstanceIdForDriver,
+  type ModelCapabilities,
+  type ModelSelection,
+  type RuntimeMode,
+  type ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
+  DEFAULT_PROVIDER_DRIVER_KIND,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 
@@ -19,6 +21,7 @@ export type ModelOption = {
   readonly providerDriver: string;
   readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode>;
   readonly providerIconUrl?: string | undefined;
+  readonly isProviderReady: boolean;
   readonly isDefault: boolean;
   readonly isLegacy: boolean;
   readonly isUnavailable?: boolean;
@@ -157,9 +160,7 @@ export function resolveNewTaskModelSelection(input: {
     input.draftSelection ??
     input.projectDefaultSelection ??
     input.stickySelection ??
-    input.modelOptions.find((option) => option.isDefault && !option.isUnavailable)?.selection ??
-    input.modelOptions.find((option) => !option.isUnavailable)?.selection ??
-    null
+    resolveDefaultModelSelection(input.modelOptions)
   );
 }
 
@@ -198,6 +199,7 @@ export function buildModelOptions(
           ? {}
           : { supportedRuntimeModes: provider.supportedRuntimeModes }),
         ...(provider.iconUrl ? { providerIconUrl: provider.iconUrl } : {}),
+        isProviderReady: provider.status === "ready" && provider.availability !== "unavailable",
         isDefault: model.isDefault === true,
         isLegacy: model.isLegacy === true,
         ...(updateRequired ? { providerUpdateRequired: updateRequired } : {}),
@@ -249,6 +251,7 @@ export function buildModelOptions(
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,
         providerDriver,
+        isProviderReady: provider?.status === "ready" && provider.availability !== "unavailable",
         isDefault: false,
         isLegacy: model?.isLegacy === true,
         ...(isModelSelectionUnavailable(config, fallbackModelSelection) ||
@@ -262,6 +265,41 @@ export function buildModelOptions(
   }
 
   return [...options.values()];
+}
+
+export function resolveDefaultModelSelection(
+  options: ReadonlyArray<ModelOption>,
+): ModelSelection | null {
+  const preferredDefaultInstanceId = defaultInstanceIdForDriver(DEFAULT_PROVIDER_DRIVER_KIND);
+  const isReadyCurrent = (option: ModelOption) =>
+    option.isProviderReady && !option.isUnavailable && !option.isLegacy;
+  const findPreferred = () =>
+    options.find(
+      (option) =>
+        isReadyCurrent(option) &&
+        option.providerKey === preferredDefaultInstanceId &&
+        option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND &&
+        option.isDefault,
+    )?.selection ??
+    options.find(
+      (option) =>
+        isReadyCurrent(option) &&
+        option.providerKey === preferredDefaultInstanceId &&
+        option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND,
+    )?.selection ??
+    options.find(
+      (option) =>
+        isReadyCurrent(option) &&
+        option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND &&
+        option.isDefault,
+    )?.selection ??
+    options.find(
+      (option) => isReadyCurrent(option) && option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND,
+    )?.selection ??
+    options.find((option) => isReadyCurrent(option) && option.isDefault)?.selection ??
+    options.find(isReadyCurrent)?.selection;
+
+  return findPreferred() ?? null;
 }
 
 export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyArray<ProviderGroup> {

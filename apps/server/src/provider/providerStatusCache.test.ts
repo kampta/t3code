@@ -80,7 +80,13 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-cache-" });
-      const codexProvider = makeProvider(CODEX_DRIVER);
+      const codexProvider = makeProvider(CODEX_DRIVER, {
+        inventory: {
+          models: "stale",
+          slashCommands: "authoritative",
+          skills: "authoritative",
+        },
+      });
       const claudeProvider = makeProvider(CLAUDE_AGENT_DRIVER, {
         status: "warning",
         auth: { status: "unknown" },

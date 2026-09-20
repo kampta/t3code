@@ -134,6 +134,21 @@ export const ServerProviderSkill = Schema.Struct({
 });
 export type ServerProviderSkill = typeof ServerProviderSkill.Type;
 
+/**
+ * Authoritative results replace an inventory, including with an empty result.
+ * Stale results retain previously discovered entries. Unavailable results do
+ * not reuse them, for example after sign-out or disabling a provider.
+ */
+export const ProviderInventoryState = Schema.Literals(["authoritative", "stale", "unavailable"]);
+export type ProviderInventoryState = typeof ProviderInventoryState.Type;
+
+export const ProviderInventory = Schema.Struct({
+  models: ProviderInventoryState,
+  slashCommands: ProviderInventoryState,
+  skills: ProviderInventoryState,
+});
+export type ProviderInventory = typeof ProviderInventory.Type;
+
 export const ServerProviderWorkspaceSnapshot = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   checkedAt: IsoDateTime,
@@ -300,6 +315,8 @@ export const ServerProvider = Schema.Struct({
   models: Schema.Array(ServerProviderModel),
   // Kept apart from `models` so clients that predate it never offer them.
   updateRequiredModels: Schema.optionalKey(Schema.Array(ServerProviderUpdateRequiredModel)),
+  // Older servers and cache files do not report inventory completeness.
+  inventory: Schema.optionalKey(ProviderInventory),
   slashCommands: Schema.Array(ServerProviderSlashCommand).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),

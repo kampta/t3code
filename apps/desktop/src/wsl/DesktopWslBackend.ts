@@ -169,6 +169,7 @@ export const layer = Layer.effect(
           onPreflightFailed: (failure) =>
             Ref.set(preflightErrorRef, Option.some(failure.reason)).pipe(Effect.as(false)),
           onReady: () => Ref.set(preflightErrorRef, Option.none()),
+          onStartupFailure: (message) => Ref.set(preflightErrorRef, Option.some(message)),
         })
         .pipe(
           Effect.asSome,

@@ -12,6 +12,7 @@ import * as HttpServer from "effect/http/HttpServer";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import * as ServerConfig from "../config.ts";
 import { getTelemetryIdentifier } from "./Identify.ts";
@@ -127,6 +128,45 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       const uuids = batches.map((batch) => batch.map((event) => event.uuid).join(","));
       assert.equal(new Set(uuids).size, 1, "every retry carries the same uuids");
       assert.equal(new Set(batches[0]?.map((event) => event.uuid)).size, 20);
+    }),
+  );
+
+  it.effect("does not send telemetry unless it is explicitly enabled", () =>
+    Effect.gen(function* () {
+      let requestCount = 0;
+      const serverConfigLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
+        prefix: "t3-telemetry-disabled-",
+      });
+      const telemetryLayer = AnalyticsService.layer.pipe(Layer.provideMerge(serverConfigLayer));
+      const configLayer = ConfigProvider.layer(
+        ConfigProvider.fromUnknown({
+          T3CODE_POSTHOG_KEY: "phc_test_key",
+          T3CODE_POSTHOG_HOST: "http://localhost",
+        }),
+      );
+      const httpClientLayer = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.sync(() => {
+            requestCount += 1;
+            return HttpClientResponse.fromWeb(request, Response.json({}));
+          }),
+        ),
+      );
+      const runtimeLayer = telemetryLayer.pipe(
+        Layer.provide(configLayer),
+        Layer.provide(httpClientLayer),
+      );
+
+      yield* Effect.gen(function* () {
+        const telemetryIdentifier = yield* getTelemetryIdentifier;
+        assert.equal(telemetryIdentifier !== null, true);
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        yield* analytics.record("test.disabled");
+        yield* analytics.flush;
+      }).pipe(Effect.provide(runtimeLayer));
+
+      assert.equal(requestCount, 0);
     }),
   );
 
