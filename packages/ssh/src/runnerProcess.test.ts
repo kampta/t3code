@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - independently read OS identity for the captured fixture process to verify the generated shell ownership checks.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -10,6 +11,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as NodeNet from "node:net";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
 
 import { buildRemoteStopScript, buildRemoteT3RunnerScript } from "./tunnel.ts";
 
@@ -19,6 +22,26 @@ const Started = Schema.Struct({
   args: Schema.Array(Schema.String),
 });
 const decodeStarted = Schema.decodeUnknownSync(Schema.fromJsonString(Started));
+
+function readProcessStart(pid: number): string {
+  const statPath = `/proc/${pid}/stat`;
+  if (NodeFS.existsSync(statPath)) {
+    const stat = NodeFS.readFileSync(statPath, "utf8");
+    const fields = stat
+      .slice(stat.lastIndexOf(") ") + 2)
+      .trim()
+      .split(/\s+/u);
+    assert.isNotEmpty(fields[19]);
+    return `pid:${pid}:proc:${fields[19]}`;
+  }
+  const started = NodeChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8",
+  })
+    .trim()
+    .replace(/\s+/gu, " ");
+  assert.isNotEmpty(started);
+  return `pid:${pid}:ps:${started}`;
+}
 
 describe.skipIf(HostProcessPlatform.defaultValue() === "win32")(
   "remote runner process ownership",
@@ -54,20 +77,22 @@ server.listen(Number(process.env.T3_TEST_PORT ?? 0), "127.0.0.1", () => {
 `,
         );
         yield* fs.chmod(cliPath, 0o700);
+        const runnerPath = path.join(fixture, "run-t3.sh");
+        yield* fs.writeFileString(
+          runnerPath,
+          buildRemoteT3RunnerScript({ nodeScriptPath: cliPath }),
+        );
 
         const runServer = (port = 0) =>
           Effect.gen(function* () {
             const child = yield* spawner.spawn(
-              ChildProcess.make("/bin/sh", ["-s", "--", "serve", "a path with spaces"], {
+              ChildProcess.make("/bin/sh", [runnerPath, "serve", "a path with spaces"], {
                 cwd: fixture,
                 env: {
-                  PATH: bin,
+                  PATH: `${bin}:/usr/bin:/bin`,
                   T3_TEST_PORT: String(port),
                 },
                 detached: false,
-                stdin: Stream.make(
-                  new TextEncoder().encode(buildRemoteT3RunnerScript({ nodeScriptPath: cliPath })),
-                ),
               }),
             );
             const ready = yield* Deferred.make<typeof Started.Type>();
@@ -182,6 +207,7 @@ server.listen(0, "127.0.0.1", () => {
             pid: `${child.pid}\n`,
             port: `${started.port}\n`,
             managed: mode === "external" ? "external\n" : "managed\n",
+            "process-start": `${readProcessStart(child.pid)}\n`,
           };
           for (const [name, contents] of Object.entries(savedState)) {
             yield* fs.writeFileString(path.join(fixture, name), contents);
@@ -228,7 +254,8 @@ server.listen(0, "127.0.0.1", () => {
           if (mode === "timeout") {
             assert.equal(result.exitCode, 1);
             assert.equal(result.stdout, "");
-            assert.include(result.stderr, "did not stop within 2 seconds");
+            assert.include(result.stderr, "did not exit after explicit disconnect");
+            assert.include(result.stderr, "keeping its managed state for a later retry");
             assert.equal(yield* fs.readFileString(signalPath), "1");
             for (const [name, contents] of Object.entries(savedState)) {
               assert.equal(yield* fs.readFileString(path.join(fixture, name)), contents);

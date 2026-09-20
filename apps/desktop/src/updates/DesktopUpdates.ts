@@ -339,7 +339,7 @@ export const make = Effect.gen(function* () {
     const hasFeedConfig = yield* hasUpdateFeedConfig;
     return Option.fromNullishOr(
       getAutoUpdateDisabledReason({
-        isDevelopment: environment.isDevelopment,
+        isDevelopment: environment.isDevelopmentBuild,
         isPackaged: environment.isPackaged,
         platform: environment.platform,
         appImage: Option.getOrUndefined(config.appImagePath),

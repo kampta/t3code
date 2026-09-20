@@ -3,6 +3,30 @@
   "iconPath": "assets/dev/blueprint-web-apple-touch-180.png",
   "scripts": [
     {
+      "name": "Rebase upstream (Mac)",
+      "command": "/Users/kampta/.local/bin/t3-update-deploy --rebase-only",
+      "icon": "configure",
+      "runOnWorktreeCreate": false
+    },
+    {
+      "name": "Deploy Sparks (from Mac)",
+      "command": "/Users/kampta/.local/bin/t3-update-deploy --sparks-only",
+      "icon": "build",
+      "runOnWorktreeCreate": false
+    },
+    {
+      "name": "Deploy Mac (external Terminal)",
+      "command": "open -a Terminal /Users/kampta/.local/bin/t3-deploy-mac.command",
+      "icon": "build",
+      "runOnWorktreeCreate": false
+    },
+    {
+      "name": "Deploy iPhone (Mac)",
+      "command": "/Users/kampta/.local/bin/t3-update-deploy --phone-only",
+      "icon": "build",
+      "runOnWorktreeCreate": false
+    },
+    {
       "name": "Setup Worktree",
       "command": "vp i && ln -sf $T3CODE_PROJECT_ROOT/.env .env && ln -sf $T3CODE_PROJECT_ROOT/infra/relay/.env infra/relay/.env && node apps/web/scripts/warm-dep-cache.ts",
       "icon": "configure",

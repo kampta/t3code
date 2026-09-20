@@ -9,6 +9,7 @@ import type {
   ServerProviderModel,
   ServerProviderState,
   ServerProviderUsageLimits,
+  ProviderInventory,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as PlatformError from "effect/PlatformError";
@@ -23,6 +24,24 @@ import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 export const DEFAULT_TIMEOUT_MS = 4_000;
 // Auth status checks involve disk/network lookups and can be slow on first run (especially Windows)
 export const AUTH_PROBE_TIMEOUT_MS = 10_000;
+
+export const AUTHORITATIVE_PROVIDER_INVENTORY = {
+  models: "authoritative",
+  slashCommands: "authoritative",
+  skills: "authoritative",
+} as const satisfies ProviderInventory;
+
+export const STALE_PROVIDER_INVENTORY = {
+  models: "stale",
+  slashCommands: "stale",
+  skills: "stale",
+} as const satisfies ProviderInventory;
+
+export const UNAVAILABLE_PROVIDER_INVENTORY = {
+  models: "unavailable",
+  slashCommands: "unavailable",
+  skills: "unavailable",
+} as const satisfies ProviderInventory;
 
 export const COMPACT_SLASH_COMMAND = {
   name: "compact",
@@ -52,6 +71,7 @@ export class ProviderCommandNotFoundError extends Schema.TaggedError<ProviderCom
 const isProviderCommandNotFoundError = Schema.is(ProviderCommandNotFoundError);
 
 export interface ProviderProbeResult {
+  readonly inventory?: ProviderInventory;
   readonly installed: boolean;
   readonly version: string | null;
   readonly status: Exclude<ServerProviderState, "disabled">;
@@ -237,6 +257,7 @@ export function buildServerProvider(input: {
     checkedAt: input.checkedAt,
     ...(input.probe.message ? { message: input.probe.message } : {}),
     models: input.models,
+    ...(input.probe.inventory ? { inventory: input.probe.inventory } : {}),
     slashCommands: [...(input.slashCommands ?? [])],
     skills: [...(input.skills ?? [])],
     ...(input.probe.usageLimits ? { usageLimits: input.probe.usageLimits } : {}),

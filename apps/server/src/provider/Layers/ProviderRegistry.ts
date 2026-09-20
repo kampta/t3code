@@ -101,6 +101,9 @@ export function upsertProviderWorkspaceSnapshot(
 }
 
 const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean => {
+  if (provider.inventory) {
+    return provider.inventory.models === "stale";
+  }
   const isAntigravity = provider.driver === ProviderDriverKind.make("antigravity");
   const isCodex = provider.driver === ProviderDriverKind.make("codex");
   if (!isAntigravity && !isCodex && provider.driver !== ProviderDriverKind.make("opencode")) {
@@ -129,6 +132,24 @@ const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean =>
 const shouldRetainMissingOpenCodeMetadata = (provider: ServerProvider): boolean =>
   provider.driver === ProviderDriverKind.make("opencode") &&
   shouldRetainMissingProviderModels(provider);
+
+const shouldRetainMissingProviderMetadata = (
+  provider: ServerProvider,
+  kind: "slashCommands" | "skills",
+): boolean =>
+  provider.inventory
+    ? provider.inventory[kind] === "stale"
+    : shouldRetainMissingOpenCodeMetadata(provider);
+
+const retainMissingItems = <T>(
+  previousItems: ReadonlyArray<T>,
+  nextItems: ReadonlyArray<T>,
+  key: (item: T) => string,
+): ReadonlyArray<T> => {
+  if (nextItems.length === 0) return previousItems;
+  const nextKeys = new Set(nextItems.map(key));
+  return [...nextItems, ...previousItems.filter((item) => !nextKeys.has(key(item)))];
+};
 
 const mergeProviderModels = (
   provider: ServerProvider,
@@ -202,27 +223,40 @@ export const mergeProviderSnapshot = (
     return nextProvider;
   }
   const savedAccount = carrySavedAntigravityAccount(previousProvider, nextProvider);
+  const slashCommands = shouldRetainMissingProviderMetadata(nextProvider, "slashCommands")
+    ? retainMissingItems(
+        previousProvider.slashCommands,
+        nextProvider.slashCommands,
+        (command) => command.name,
+      )
+    : nextProvider.slashCommands;
+  const skills = shouldRetainMissingProviderMetadata(nextProvider, "skills")
+    ? retainMissingItems(previousProvider.skills, nextProvider.skills, (skill) => skill.path)
+    : nextProvider.skills;
+  const models = mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models);
+  const recoveredCodexInventory =
+    nextProvider.driver === ProviderDriverKind.make("codex") &&
+    nextProvider.enabled &&
+    nextProvider.installed &&
+    nextProvider.status === "warning" &&
+    nextProvider.auth.status !== "unauthenticated" &&
+    nextProvider.inventory?.models === "stale" &&
+    models.length > 0;
   // "Google account access is not checked yet" describes the probe, not the
   // account; it must not outlive the state it explained.
   const { message: _uncheckedMessage, ...nextWithoutMessage } = nextProvider;
   return {
     ...(savedAccount?.status === "ready" ? nextWithoutMessage : nextProvider),
     ...savedAccount,
-    models: mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
+    ...(recoveredCodexInventory ? { status: "ready" as const } : {}),
+    models,
+    slashCommands,
+    skills,
     ...(nextProvider.workspaceSnapshots !== undefined
       ? { workspaceSnapshots: nextProvider.workspaceSnapshots }
       : previousProvider.workspaceSnapshots !== undefined
         ? { workspaceSnapshots: previousProvider.workspaceSnapshots }
         : {}),
-    ...(shouldRetainMissingOpenCodeMetadata(nextProvider)
-      ? {
-          slashCommands:
-            nextProvider.slashCommands.length === 0
-              ? previousProvider.slashCommands
-              : nextProvider.slashCommands,
-          skills: nextProvider.skills.length === 0 ? previousProvider.skills : nextProvider.skills,
-        }
-      : {}),
   };
 };
 
