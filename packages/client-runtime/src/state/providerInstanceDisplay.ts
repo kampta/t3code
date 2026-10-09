@@ -9,6 +9,7 @@ import {
   defaultInstanceIdForDriver,
   PROVIDER_DISPLAY_NAMES,
   type ProviderDriverKind,
+  type ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
 
@@ -72,17 +73,32 @@ export function normalizeProviderAccentColor(value: string | undefined): string 
 
 /**
  * Whether an instance's icon carries the account badge: accent color set, or
- * several instances sharing a driver so the brand glyph alone is ambiguous.
+ * another enabled instance sharing its driver so the brand glyph alone is
+ * ambiguous. A turned-off instance can't be picked, so it never badges the
+ * instance that remains; a thread still on it keeps its own badge.
  * Shared by the composer trigger, the picker rail, and sidebar/thread rows.
  */
 export function shouldShowInstanceBadge(
-  entry: { readonly driverKind: ProviderDriverKind; readonly accentColor?: string | undefined },
-  entries: Iterable<{ readonly driverKind: ProviderDriverKind }>,
+  entry: {
+    readonly instanceId: ProviderInstanceId;
+    readonly driverKind: ProviderDriverKind;
+    readonly accentColor?: string | undefined;
+  },
+  entries: Iterable<{
+    readonly instanceId: ProviderInstanceId;
+    readonly driverKind: ProviderDriverKind;
+    readonly enabled: boolean;
+  }>,
 ): boolean {
   if (entry.accentColor) return true;
-  let sharedDriverCount = 0;
   for (const candidate of entries) {
-    if (candidate.driverKind === entry.driverKind && ++sharedDriverCount > 1) return true;
+    if (
+      candidate.enabled &&
+      candidate.driverKind === entry.driverKind &&
+      candidate.instanceId !== entry.instanceId
+    ) {
+      return true;
+    }
   }
   return false;
 }

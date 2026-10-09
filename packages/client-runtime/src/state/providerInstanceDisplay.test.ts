@@ -89,20 +89,35 @@ describe("normalizeProviderAccentColor", () => {
 });
 
 describe("shouldShowInstanceBadge", () => {
+  const codexId = ProviderInstanceId.make("codex");
+  const codexWorkId = ProviderInstanceId.make("codex_work");
+
   it("shows the badge when the entry has an accent color", () => {
-    const entry = { driverKind: codex, accentColor: "#ff8800" };
+    const entry = { instanceId: codexId, driverKind: codex, enabled: true, accentColor: "#ff8800" };
     expect(shouldShowInstanceBadge(entry, [entry])).toBe(true);
   });
 
   it("shows the badge when two entries share a driver, even without an accent", () => {
-    const first = { driverKind: codex, accentColor: undefined };
-    const second = { driverKind: codex, accentColor: undefined };
+    const first = { instanceId: codexId, driverKind: codex, enabled: true, accentColor: undefined };
+    const second = { instanceId: codexWorkId, driverKind: codex, enabled: true };
     expect(shouldShowInstanceBadge(first, [first, second])).toBe(true);
   });
 
   it("hides the badge for a single instance of a driver with no accent", () => {
-    const entry = { driverKind: codex, accentColor: undefined };
-    const other = { driverKind: claude, accentColor: undefined };
+    const entry = { instanceId: codexId, driverKind: codex, enabled: true, accentColor: undefined };
+    const other = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      driverKind: claude,
+      enabled: true,
+    };
     expect(shouldShowInstanceBadge(entry, [entry, other])).toBe(false);
+  });
+
+  it("ignores a turned-off instance of the same driver", () => {
+    const personal = { instanceId: codexId, driverKind: codex, enabled: false };
+    const work = { instanceId: codexWorkId, driverKind: codex, enabled: true };
+    expect(shouldShowInstanceBadge(work, [personal, work])).toBe(false);
+    // Threads still on the turned-off instance stay distinguishable.
+    expect(shouldShowInstanceBadge(personal, [personal, work])).toBe(true);
   });
 });
