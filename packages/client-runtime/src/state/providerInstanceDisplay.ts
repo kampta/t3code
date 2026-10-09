@@ -9,6 +9,7 @@ import {
   defaultInstanceIdForDriver,
   PROVIDER_DISPLAY_NAMES,
   type ProviderDriverKind,
+  type ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
 
@@ -72,24 +73,29 @@ export function normalizeProviderAccentColor(value: string | undefined): string 
 
 /**
  * Whether an instance's icon carries the account badge: accent color set, or
- * several instances sharing a provider so the brand glyph alone is ambiguous.
- * ACP agents have distinct glyphs even though they share the registry driver.
+ * another enabled instance sharing its provider so the brand glyph alone is
+ * ambiguous. ACP agents have distinct glyphs even though they share the
+ * registry driver. A turned-off instance can't be picked, so it never badges
+ * the instance that remains; a thread still on it keeps its own badge.
  * Shared by the composer trigger, the picker rail, and sidebar/thread rows.
  */
 export function shouldShowInstanceBadge(
   entry: {
+    readonly instanceId: ProviderInstanceId;
     readonly driverKind: ProviderDriverKind;
     readonly accentColor?: string | undefined;
     readonly acpRegistryAgentId?: string | undefined;
   },
   entries: Iterable<{
+    readonly instanceId: ProviderInstanceId;
     readonly driverKind: ProviderDriverKind;
+    readonly enabled: boolean;
     readonly acpRegistryAgentId?: string | undefined;
   }>,
 ): boolean {
   if (entry.accentColor) return true;
-  let sharedProviderCount = 0;
   for (const candidate of entries) {
+    if (!candidate.enabled || candidate.instanceId === entry.instanceId) continue;
     if (candidate.driverKind !== entry.driverKind) continue;
     if (
       entry.driverKind === "acpRegistry" &&
@@ -97,7 +103,7 @@ export function shouldShowInstanceBadge(
     ) {
       continue;
     }
-    if (++sharedProviderCount > 1) return true;
+    return true;
   }
   return false;
 }

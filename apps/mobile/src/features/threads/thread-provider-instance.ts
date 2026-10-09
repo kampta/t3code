@@ -38,8 +38,12 @@ export function resolveThreadProviderInstance(
   return {
     ...entry,
     showBadge: shouldShowInstanceBadge(
-      entry,
-      providers.map((provider) => ({ driverKind: provider.driver })),
+      { ...entry, instanceId },
+      providers.map((provider) => ({
+        instanceId: provider.instanceId,
+        driverKind: provider.driver,
+        enabled: provider.enabled,
+      })),
     ),
   };
 }

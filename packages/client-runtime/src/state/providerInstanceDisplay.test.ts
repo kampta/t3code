@@ -90,47 +90,64 @@ describe("normalizeProviderAccentColor", () => {
 });
 
 describe("shouldShowInstanceBadge", () => {
+  const codexId = ProviderInstanceId.make("codex");
+  const codexWorkId = ProviderInstanceId.make("codex_work");
+  const acpEntry = (instanceId: string, acpRegistryAgentId?: string) => ({
+    instanceId: ProviderInstanceId.make(instanceId),
+    driverKind: acpRegistry,
+    enabled: true,
+    ...(acpRegistryAgentId === undefined ? {} : { acpRegistryAgentId }),
+  });
+
   it("hides badges for distinct ACP agents sharing the registry driver", () => {
-    const mistral = { driverKind: acpRegistry, acpRegistryAgentId: "mistral-vibe" };
-    const devin = { driverKind: acpRegistry, acpRegistryAgentId: "devin" };
+    const mistral = acpEntry("mistral", "mistral-vibe");
+    const devin = acpEntry("devin", "devin");
     expect(shouldShowInstanceBadge(mistral, [mistral, devin])).toBe(false);
     expect(shouldShowInstanceBadge(devin, [mistral, devin])).toBe(false);
   });
 
   it("shows badges for multiple instances of the same ACP agent", () => {
-    const first = { driverKind: acpRegistry, acpRegistryAgentId: "mistral-vibe" };
-    const second = { ...first };
+    const first = acpEntry("mistral_one", "mistral-vibe");
+    const second = acpEntry("mistral_two", "mistral-vibe");
     expect(shouldShowInstanceBadge(first, [first, second])).toBe(true);
   });
 
   it("keeps an explicit accent on a single ACP agent", () => {
-    const entry = {
-      driverKind: acpRegistry,
-      acpRegistryAgentId: "mistral-vibe",
-      accentColor: "#ff8800",
-    };
+    const entry = { ...acpEntry("mistral", "mistral-vibe"), accentColor: "#ff8800" };
     expect(shouldShowInstanceBadge(entry, [entry])).toBe(true);
   });
 
   it("distinguishes registry instances whose agent identity is unavailable", () => {
-    const entry = { driverKind: acpRegistry };
-    expect(shouldShowInstanceBadge(entry, [entry, { ...entry }])).toBe(true);
+    const entry = acpEntry("registry_one");
+    expect(shouldShowInstanceBadge(entry, [entry, acpEntry("registry_two")])).toBe(true);
   });
 
   it("shows the badge when the entry has an accent color", () => {
-    const entry = { driverKind: codex, accentColor: "#ff8800" };
+    const entry = { instanceId: codexId, driverKind: codex, enabled: true, accentColor: "#ff8800" };
     expect(shouldShowInstanceBadge(entry, [entry])).toBe(true);
   });
 
   it("shows the badge when two entries share a driver, even without an accent", () => {
-    const first = { driverKind: codex, accentColor: undefined };
-    const second = { driverKind: codex, accentColor: undefined };
+    const first = { instanceId: codexId, driverKind: codex, enabled: true, accentColor: undefined };
+    const second = { instanceId: codexWorkId, driverKind: codex, enabled: true };
     expect(shouldShowInstanceBadge(first, [first, second])).toBe(true);
   });
 
   it("hides the badge for a single instance of a driver with no accent", () => {
-    const entry = { driverKind: codex, accentColor: undefined };
-    const other = { driverKind: claude, accentColor: undefined };
+    const entry = { instanceId: codexId, driverKind: codex, enabled: true, accentColor: undefined };
+    const other = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      driverKind: claude,
+      enabled: true,
+    };
     expect(shouldShowInstanceBadge(entry, [entry, other])).toBe(false);
+  });
+
+  it("ignores a turned-off instance of the same driver", () => {
+    const personal = { instanceId: codexId, driverKind: codex, enabled: false };
+    const work = { instanceId: codexWorkId, driverKind: codex, enabled: true };
+    expect(shouldShowInstanceBadge(work, [personal, work])).toBe(false);
+    // Threads still on the turned-off instance stay distinguishable.
+    expect(shouldShowInstanceBadge(personal, [personal, work])).toBe(true);
   });
 });

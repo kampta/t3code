@@ -9,7 +9,7 @@ import { Atom } from "effect/reactivity";
 
 export type ThreadListProvider = Pick<
   ServerProvider,
-  "instanceId" | "driver" | "displayName" | "accentColor" | "iconUrl"
+  "instanceId" | "driver" | "displayName" | "accentColor" | "iconUrl" | "enabled"
 >;
 
 const capabilityKeys = [
@@ -25,12 +25,13 @@ const capabilityKeys = [
 function selectEnvironment(config: ServerConfig) {
   return {
     providers: config.providers.map(
-      ({ instanceId, driver, displayName, accentColor, iconUrl }) => ({
+      ({ instanceId, driver, displayName, accentColor, iconUrl, enabled }) => ({
         instanceId,
         driver,
         displayName,
         accentColor,
         iconUrl,
+        enabled,
       }),
     ),
     machineKind: resolveEnvironmentMachineKind(config),
@@ -53,7 +54,8 @@ function sameProviders(
         provider.driver === other.driver &&
         provider.displayName === other.displayName &&
         provider.accentColor === other.accentColor &&
-        provider.iconUrl === other.iconUrl
+        provider.iconUrl === other.iconUrl &&
+        provider.enabled === other.enabled
       );
     })
   );

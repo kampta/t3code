@@ -19,9 +19,12 @@ function makeConfig(
     readonly driver: string;
     readonly displayName?: string;
     readonly accentColor?: string;
+    readonly enabled?: boolean;
   }>,
 ): ServerConfig {
-  return { providers } as unknown as ServerConfig;
+  return {
+    providers: providers.map((provider) => ({ enabled: true, ...provider })),
+  } as unknown as ServerConfig;
 }
 
 function makeThread(environmentId: EnvironmentId, instanceId: string): EnvironmentThreadShell {
@@ -98,6 +101,21 @@ describe("resolveThreadProviderInstance", () => {
         makeThread(environmentId, "codex_personal"),
       )?.displayName,
     ).toBe("Codex Personal");
+  });
+
+  it("ignores a turned-off instance when badging the remaining one", () => {
+    const environmentId = EnvironmentId.make("environment-a");
+    const providers = makeConfig([
+      { instanceId: "codex", driver: "codex", enabled: false },
+      { instanceId: "codex_work", driver: "codex", displayName: "Codex Work" },
+    ]).providers;
+
+    expect(
+      resolveThreadProviderInstance(providers, makeThread(environmentId, "codex_work"))?.showBadge,
+    ).toBe(false);
+    expect(
+      resolveThreadProviderInstance(providers, makeThread(environmentId, "codex"))?.showBadge,
+    ).toBe(true);
   });
 
   it("uses the current runtime owner after a provider handoff", () => {
