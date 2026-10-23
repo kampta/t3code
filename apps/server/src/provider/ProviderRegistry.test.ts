@@ -230,6 +230,10 @@ function makeCodexProbeSnapshot(
   input: Partial<CodexAppServerProviderSnapshot> = {},
 ): CodexAppServerProviderSnapshot {
   return {
+    inventory: {
+      models: "authoritative",
+      skills: "authoritative",
+    },
     version: "1.0.0",
     account: {
       account: {
@@ -327,6 +331,25 @@ it.layer(
   Layer.mergeAll(layerTestNodeServices, ServerSettingsModule.layerTest(), layerTestHttpClient),
 )("ProviderRegistry", (it) => {
   describe("checkCodexProviderStatus", () => {
+    it.effect("reports stale model discovery without losing authentication", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+          Effect.succeed(
+            makeCodexProbeSnapshot({
+              inventory: { models: "stale", skills: "authoritative" },
+              models: [],
+            }),
+          ),
+        );
+
+        assert.strictEqual(status.status, "warning");
+        assert.strictEqual(status.auth.status, "authenticated");
+        assert.strictEqual(status.inventory?.models, "stale");
+        assert.strictEqual(status.inventory?.skills, "authoritative");
+        assert.match(status.message ?? "", /model discovery did not complete/);
+      }),
+    );
+
     it.effect("uses the app-server account and model list for provider status", () =>
       Effect.gen(function* () {
         const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
@@ -969,6 +992,62 @@ it.layer(
     });
 
     describe("Codex model inventories", () => {
+      it("retains only the Codex inventory fields marked stale", () => {
+        const previousSkill = {
+          name: "previous-skill",
+          path: "/skills/previous/SKILL.md",
+          enabled: true,
+        } as const;
+        const freshSkill = {
+          name: "fresh-skill",
+          path: "/skills/fresh/SKILL.md",
+          enabled: true,
+        } as const;
+        const previousProvider = {
+          ...cachedProvider,
+          slashCommands: [{ name: "previous-command" }],
+          skills: [previousSkill],
+        } satisfies ServerProvider;
+
+        const staleModels = ProviderRegistry.mergeProviderSnapshot(previousProvider, {
+          ...refreshedProvider,
+          status: "warning",
+          inventory: {
+            models: "stale",
+            slashCommands: "authoritative",
+            skills: "authoritative",
+          },
+          models: [customModel],
+          slashCommands: [{ name: "fresh-command" }],
+          skills: [freshSkill],
+        });
+        assert.deepStrictEqual(staleModels.models, [customModel, ...cachedProvider.models]);
+        assert.strictEqual(staleModels.status, "ready");
+        assert.deepStrictEqual(staleModels.slashCommands, [{ name: "fresh-command" }]);
+        assert.deepStrictEqual(staleModels.skills, [freshSkill]);
+        assert.strictEqual(
+          ProviderRegistry.mergeProviderSnapshot(previousProvider, {
+            ...staleModels,
+            status: "warning",
+            auth: { status: "unknown" },
+            models: [customModel],
+          }).status,
+          "ready",
+        );
+
+        const staleSkills = ProviderRegistry.mergeProviderSnapshot(previousProvider, {
+          ...refreshedProvider,
+          inventory: {
+            models: "authoritative",
+            slashCommands: "authoritative",
+            skills: "stale",
+          },
+          skills: [],
+        });
+        assert.deepStrictEqual(staleSkills.models, refreshedProvider.models);
+        assert.deepStrictEqual(staleSkills.skills, [previousSkill]);
+      });
+
       const cachedProvider = {
         instanceId: ProviderInstanceId.make("codex-personal"),
         driver: ProviderDriverKind.make("codex"),

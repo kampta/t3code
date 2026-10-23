@@ -7,6 +7,7 @@ import {
   ProviderInstanceId,
   type ModelSelection,
   type ServerConfig,
+  type ServerProvider,
   type ServerSettings,
 } from "@t3tools/contracts";
 
@@ -15,13 +16,84 @@ import {
   describeUnavailableModelSelection,
   groupByProvider,
   isModelSelectionUnavailable,
+  resolveDefaultModelSelection,
   resolveDefaultableModelSelection,
   resolveNewTaskModelSelection,
   resolveSelectableModelSelection,
   type ModelOption,
 } from "./modelOptions";
 
+function selectableProvider(
+  driver: string,
+  instanceId = driver,
+  status: ServerProvider["status"] = "ready",
+): ServerProvider {
+  return {
+    instanceId: ProviderInstanceId.make(instanceId),
+    driver: ProviderDriverKind.make(driver),
+    enabled: true,
+    installed: true,
+    status,
+    availability: "available",
+    version: null,
+    checkedAt: "2026-10-22T00:00:00.000Z",
+    auth: { status: "authenticated" },
+    models: [
+      {
+        slug: `${instanceId}-model`,
+        name: "Default",
+        isCustom: false,
+        isDefault: true,
+        capabilities: null,
+      },
+    ],
+    slashCommands: [],
+    skills: [],
+  };
+}
+
 describe("mobile model options", () => {
+  it.each([
+    {
+      name: "prefers the Codex default when Claude is listed first",
+      providers: [selectableProvider("claudeAgent"), selectableProvider("codex")],
+      expected: "codex",
+    },
+    {
+      name: "prefers the built-in Codex instance over a custom Codex instance",
+      providers: [selectableProvider("codex", "codex_work"), selectableProvider("codex")],
+      expected: "codex",
+    },
+    {
+      name: "does not treat a non-Codex driver in the default Codex slot as preferred",
+      providers: [
+        selectableProvider("claudeAgent", "codex"),
+        selectableProvider("codex", "codex_work"),
+      ],
+      expected: "codex_work",
+    },
+    {
+      name: "prefers a ready Claude provider over an errored Codex provider",
+      providers: [selectableProvider("codex", "codex", "error"), selectableProvider("claudeAgent")],
+      expected: "claudeAgent",
+    },
+    {
+      name: "does not select a warning provider as an implicit default",
+      providers: [selectableProvider("codex", "codex", "warning")],
+      expected: null,
+    },
+  ])("$name", ({ providers, expected }) => {
+    const config = { providers } as unknown as ServerConfig;
+    const selection = resolveDefaultModelSelection(
+      buildModelOptions(config, null, undefined, null),
+    );
+    if (expected === null) {
+      expect(selection).toBeNull();
+    } else {
+      expect(selection).toMatchObject({ instanceId: expected, model: `${expected}-model` });
+    }
+  });
+
   it("distinguishes same-name OpenCode models without changing their routing", () => {
     const sources = [
       { id: "anthropic", label: "Anthropic" },
@@ -512,6 +584,8 @@ describe("mobile model options", () => {
           displayName: "Codex",
           enabled: true,
           installed: true,
+          status: "ready",
+          availability: "available",
           auth: { status: "authenticated" },
           models: [
             { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isCustom: false, capabilities: null },
@@ -542,6 +616,18 @@ describe("mobile model options", () => {
     const providerDefault = {
       selection: { instanceId: ProviderInstanceId.make("codex"), model: "default" },
       isDefault: true,
+      isLegacy: false,
+      isProviderReady: true,
+      providerKey: "codex",
+      providerDriver: "codex",
+    } as ModelOption;
+    const claudeDefault = {
+      selection: { instanceId: ProviderInstanceId.make("claudeAgent"), model: "default" },
+      isDefault: true,
+      isLegacy: false,
+      isProviderReady: true,
+      providerKey: "claudeAgent",
+      providerDriver: "claudeAgent",
     } as ModelOption;
     const resolve = (
       draftSelection: ModelSelection | null,
@@ -552,7 +638,7 @@ describe("mobile model options", () => {
         draftSelection,
         projectDefaultSelection,
         stickySelection,
-        modelOptions: [providerDefault],
+        modelOptions: [claudeDefault, providerDefault],
       });
 
     expect(resolve(draft, project, sticky)).toBe(draft);

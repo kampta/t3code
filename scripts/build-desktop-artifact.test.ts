@@ -234,6 +234,68 @@ const makeMacPayloadFixture = Effect.fn("test.makeMacPayloadFixture")(function* 
 });
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("isolates packaged development builds from production", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3-dev.local",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const linuxConfig = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        "1.2.3-dev.local",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const productionConfig = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      const mac = config.mac as Record<string, unknown>;
+      const productionMac = productionConfig.mac as Record<string, unknown>;
+      const linux = linuxConfig.linux as Record<string, unknown>;
+      assert.equal(config.appId, "com.t3tools.t3code.dev");
+      assert.equal(config.productName, "T3 Code (Dev)");
+      assert.equal(config.artifactName, "T3-Code-Dev-${version}-${arch}.${ext}");
+      assert.equal(config.publish, null);
+      assert.equal(mac.identity, "-");
+      assert.equal(mac.hardenedRuntime, false);
+      assert.deepStrictEqual(mac.protocols, [{ name: "T3 Code", schemes: ["t3code-dev"] }]);
+      assert.notProperty(mac.extendInfo as Record<string, unknown>, "CFBundleDocumentTypes");
+      assert.deepStrictEqual(productionMac.protocols, [
+        { name: "T3 Code", schemes: ["t3code"] },
+        { name: "Web site URL", schemes: ["http", "https"], role: "Viewer" },
+      ]);
+      assert.property(productionMac.extendInfo as Record<string, unknown>, "CFBundleDocumentTypes");
+      assert.equal(linuxConfig.appId, "com.t3tools.t3code.dev");
+      assert.equal(linux.executableName, "t3code-dev");
+      assert.deepStrictEqual(linux.target, ["AppImage", "deb"]);
+      assert.deepStrictEqual(linux.protocols, [{ name: "T3 Code", schemes: ["t3code-dev"] }]);
+      assert.deepStrictEqual(linux.desktop, {
+        entry: { StartupWMClass: "t3code-dev" },
+      });
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { T3CODE_DESKTOP_UPDATE_REPOSITORY: "owner/repo" } }),
+        ),
+      ),
+    ),
+  );
+
   it.effect("rejects overlapping builds from another process until restoration finishes", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1140,7 +1202,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
     return Effect.scoped(
       Effect.gen(function* () {
+        const path = yield* Path.Path;
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const primaryExecutablePath = path.join(fixture.packagedAppDir, fixture.appExecutableName);
         yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
           appExecutableName: fixture.appExecutableName,
@@ -1148,9 +1212,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
         });
 
-        assert.isFalse(
-          commands.some((command) => command.options.env?.ELECTRON_RUN_AS_NODE === "1"),
-        );
+        assert.isFalse(commands.some((command) => command.command === primaryExecutablePath));
         assert.isTrue(
           commands.some(
             (command) =>
