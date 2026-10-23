@@ -11,6 +11,7 @@ import type {
   ServerProviderUpdateRequiredModel,
   ServerProviderState,
   ServerProviderUsageLimits,
+  ProviderInventory,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as PlatformError from "effect/PlatformError";
@@ -58,6 +59,24 @@ export const resolveProviderProbeTimeoutMs = (
     : defaultTimeoutMs;
 };
 
+export const AUTHORITATIVE_PROVIDER_INVENTORY = {
+  models: "authoritative",
+  slashCommands: "authoritative",
+  skills: "authoritative",
+} as const satisfies ProviderInventory;
+
+export const STALE_PROVIDER_INVENTORY = {
+  models: "stale",
+  slashCommands: "stale",
+  skills: "stale",
+} as const satisfies ProviderInventory;
+
+export const UNAVAILABLE_PROVIDER_INVENTORY = {
+  models: "unavailable",
+  slashCommands: "unavailable",
+  skills: "unavailable",
+} as const satisfies ProviderInventory;
+
 export const COMPACT_SLASH_COMMAND = {
   name: "compact",
   description: "Summarize the conversation and reduce context usage",
@@ -98,6 +117,7 @@ export class ProviderProbeOutputLimitError extends Schema.TaggedError<
 }
 
 export interface ProviderProbeResult {
+  readonly inventory?: ProviderInventory;
   readonly installed: boolean;
   readonly version: string | null;
   readonly status: Exclude<ServerProviderState, "disabled">;
@@ -333,6 +353,7 @@ export function buildServerProvider(input: {
     ...(input.updateRequiredModels?.length
       ? { updateRequiredModels: input.updateRequiredModels }
       : {}),
+    ...(input.probe.inventory ? { inventory: input.probe.inventory } : {}),
     slashCommands: [...(input.slashCommands ?? [])],
     skills: [...(input.skills ?? [])],
     ...(input.probe.usageLimits ? { usageLimits: input.probe.usageLimits } : {}),

@@ -71,7 +71,7 @@ const TelemetryEnvConfig = Config.all({
   posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(
     Config.withDefault("https://ingest.t3.codes"),
   ),
-  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(true)),
+  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.option),
   flushBatchSize: Config.Number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
   maxBufferedEvents: Config.Number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
     Config.withDefault(1_000),
@@ -120,6 +120,7 @@ function serverOsFromNodePlatform(platform: string): ClientOs {
 /** @public */
 export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
+  const configuredEnabled = Option.getOrUndefined(telemetryConfig.enabled);
   const hostEnvironment = yield* HostProcess.Environment;
   const awaitingShellConsent = hostEnvironment.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1";
   // A managed policy can switch analytics off over the environment, never on.
@@ -127,13 +128,13 @@ export const make = Effect.gen(function* () {
     ManagedPolicy.deniedBy(yield* ManagedPolicy.ManagedPolicy, "telemetry") === undefined;
   // A cached PATH does not establish consent from the current login shell.
   const telemetryEnabled = Effect.suspend(() => {
-    if (!telemetryConfig.enabled || !policyAllows) return Effect.succeed(false);
-    if (!awaitingShellConsent) return Effect.succeed(true);
+    if (configuredEnabled === false || !policyAllows) return Effect.succeed(false);
+    if (!awaitingShellConsent) return Effect.succeed(configuredEnabled ?? false);
     if (hostEnvironment.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1")
       return Effect.succeed(false);
     const preference = hostEnvironment.T3CODE_TELEMETRY_ENABLED;
     return Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(
-      Config.withDefault(true),
+      Config.withDefault(false),
       Effect.provideService(
         ConfigProvider.ConfigProvider,
         ConfigProvider.fromEnv({

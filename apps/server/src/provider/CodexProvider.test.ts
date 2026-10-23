@@ -1,3 +1,4 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -10,9 +11,14 @@ import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as TestClock from "effect/testing/TestClock";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { CodexSettings } from "@t3tools/contracts";
+import * as FileSystem from "effect/FileSystem";
+import * as Schema from "effect/Schema";
 
+import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 import {
   applyPreferredCodexDefaultModel,
+  checkCodexProviderStatus,
   codexCustomEndpoint,
   codexRoutesSpendNativeQuota,
   makeCodexSkillsProbe,
@@ -143,6 +149,83 @@ it.effect("reuses one Codex skills helper per launch until it idles out", () =>
     yield* Scope.close(providerScope, Exit.void);
     assert.strictEqual(helpers[3]!.closed, true);
   }).pipe(Effect.provideService(HostProcess.Platform, "linux")),
+);
+
+const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+
+it.effect("keeps managed Codex authentication when inventory discovery is stale", () =>
+  Effect.gen(function* () {
+    const managedAuth = { status: "authenticated" as const, label: "Managed Codex account" };
+    const snapshot = yield* checkCodexProviderStatus(
+      decodeCodexSettings({ enabled: true }),
+      () =>
+        Effect.succeed({
+          inventory: { models: "stale", skills: "authoritative" },
+          account: { account: null, requiresOpenaiAuth: true },
+          rateLimits: { failure: "Native usage unavailable" },
+          version: "1.0.0",
+          models: [],
+          skills: [],
+        }),
+      undefined,
+      managedAuth,
+    );
+
+    assert.deepStrictEqual(snapshot.auth, managedAuth);
+    assert.strictEqual(snapshot.status, "warning");
+    assert.strictEqual(snapshot.inventory?.models, "stale");
+    assert.match(snapshot.message ?? "", /model discovery did not complete/);
+    assert.strictEqual(snapshot.usageLimits, undefined);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live("degrades stalled model pagination but surfaces protocol failures", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-inventory-" });
+    const binaryPath = writeFakeCli({
+      directory,
+      name: "codex-inventory",
+      source: [
+        'import { createInterface } from "node:readline";',
+        'createInterface({ input: process.stdin }).on("line", (line) => {',
+        "  const request = JSON.parse(line);",
+        "  if (request.id === undefined) return;",
+        '  if (request.method === "model/list" && request.params?.cursor === "next" && !process.env.T3_TEST_MODEL_ERROR) return;',
+        "  const responses = {",
+        '    initialize: { userAgent: "codex/1.0.0", codexHome: process.cwd(), platformFamily: "unix", platformOs: "darwin" },',
+        '    "account/read": { account: { type: "apiKey" }, requiresOpenaiAuth: false },',
+        '    "skills/list": { data: [{ cwd: process.cwd(), errors: [], skills: [] }] },',
+        '    "model/list": { data: [{ id: "partial", model: "partial", displayName: "Partial", description: "Partial page", hidden: false, isDefault: true, defaultReasoningEffort: "medium", supportedReasoningEfforts: [], defaultServiceTier: null, serviceTiers: [], additionalSpeedTiers: [] }], nextCursor: "next" },',
+        "  };",
+        '  const result = request.method === "model/list" && request.params?.cursor === "next" ? undefined : responses[request.method];',
+        '  const response = result === undefined ? { id: request.id, error: { code: -32601, message: "Not found" } } : { id: request.id, result };',
+        '  process.stdout.write(JSON.stringify(response) + "\\n");',
+        "});",
+      ].join("\n"),
+    });
+
+    const settings = decodeCodexSettings({ enabled: true, binaryPath });
+    const snapshot = yield* checkCodexProviderStatus(settings, undefined, {
+      ...process.env,
+      T3_TEST_MODEL_ERROR: "",
+    });
+
+    assert.strictEqual(snapshot.status, "warning");
+    assert.strictEqual(snapshot.auth.status, "authenticated");
+    assert.strictEqual(snapshot.inventory?.models, "stale");
+    assert.strictEqual(snapshot.inventory?.skills, "authoritative");
+    assert.deepStrictEqual(snapshot.models, []);
+    assert.match(snapshot.message ?? "", /model discovery did not complete/);
+
+    const incompatible = yield* checkCodexProviderStatus(settings, undefined, {
+      ...process.env,
+      T3_TEST_MODEL_ERROR: "1",
+    });
+    assert.strictEqual(incompatible.status, "error");
+    assert.strictEqual(incompatible.installed, true);
+    assert.match(incompatible.message ?? "", /Not found/);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it("maps current Codex model capability fields", () => {
