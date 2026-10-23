@@ -9,11 +9,11 @@ import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
-import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpServer from "effect/http/HttpServer";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import * as ServerConfig from "../config.ts";
 import { getTelemetryIdentity } from "./Identify.ts";
@@ -167,6 +167,45 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
 
       assert.equal(owners.filter((observedBy) => observedBy === "client").length, 1_000);
       assert.equal(owners.filter((observedBy) => observedBy === "server").length, 1);
+    }),
+  );
+
+  it.effect("does not send telemetry unless it is explicitly enabled", () =>
+    Effect.gen(function* () {
+      let requestCount = 0;
+      const serverConfigLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
+        prefix: "t3-telemetry-disabled-",
+      });
+      const telemetryLayer = AnalyticsService.layer.pipe(Layer.provideMerge(serverConfigLayer));
+      const configLayer = ConfigProvider.layer(
+        ConfigProvider.fromUnknown({
+          T3CODE_POSTHOG_KEY: "phc_test_key",
+          T3CODE_POSTHOG_HOST: "http://localhost",
+        }),
+      );
+      const httpClientLayer = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.sync(() => {
+            requestCount += 1;
+            return HttpClientResponse.fromWeb(request, Response.json({}));
+          }),
+        ),
+      );
+      const runtimeLayer = telemetryLayer.pipe(
+        Layer.provide(configLayer),
+        Layer.provide(httpClientLayer),
+      );
+
+      yield* Effect.gen(function* () {
+        const { distinctId } = yield* getTelemetryIdentity;
+        assert.equal(distinctId !== null, true);
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        yield* analytics.record("test.disabled");
+        yield* analytics.flush;
+      }).pipe(Effect.provide(runtimeLayer));
+
+      assert.equal(requestCount, 0);
     }),
   );
 

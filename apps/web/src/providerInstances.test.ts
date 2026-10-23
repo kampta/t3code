@@ -1,5 +1,4 @@
 import {
-  DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -44,7 +43,7 @@ function provider(input: {
     ...(input.availability ? { availability: input.availability } : {}),
     auth: { status: "authenticated" },
     checkedAt: "2026-01-01T00:00:00.000Z",
-    models: input.models ?? [],
+    models: input.models ?? [model("test-default", false, true)],
     slashCommands: [],
     skills: [],
   };
@@ -311,6 +310,15 @@ describe("resolveSelectableProviderInstance", () => {
     expect(resolveSelectableProviderInstance(providers, disabled)).toBe(fallback);
   });
 
+  it("does not treat a non-Codex driver in the default Codex slot as preferred", () => {
+    const providers = [
+      provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "codex" }),
+      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex_work" }),
+    ];
+
+    expect(resolveSelectableProviderInstance(providers, undefined)).toBe("codex_work");
+  });
+
   it("prefers a ready instance over an enabled one whose driver cannot start", () => {
     const notInstalled = ProviderInstanceId.make("codex");
     const ready = ProviderInstanceId.make("claudeAgent");
@@ -324,6 +332,25 @@ describe("resolveSelectableProviderInstance", () => {
     ];
 
     expect(resolveSelectableProviderInstance(providers, undefined)).toBe(ready);
+  });
+
+  it("does not invent a warning instance as a new-user default", () => {
+    const notInstalled = ProviderInstanceId.make("codex");
+    const unprobed = ProviderInstanceId.make("claudeAgent");
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: notInstalled,
+        status: "error",
+      }),
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: unprobed,
+        status: "warning",
+      }),
+    ];
+
+    expect(resolveSelectableProviderInstance(providers, undefined)).toBeUndefined();
   });
 
   it("keeps a requested instance even when its probe errored", () => {
@@ -397,16 +424,20 @@ describe("getDefaultProviderInstanceModel", () => {
     ).toBe("claude-opus-4-8");
   });
 
-  it("falls back to the driver default when the instance reports no models", () => {
+  it("returns no default when the instance reports no models", () => {
     const providers = [
-      provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claudeAgent" }),
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: "claudeAgent",
+        models: [],
+      }),
     ];
 
     const resolved = getDefaultProviderInstanceModel(
       providers,
       ProviderInstanceId.make("claudeAgent"),
     );
-    expect(resolved).toBe(DEFAULT_MODEL_BY_PROVIDER[ProviderDriverKind.make("claudeAgent")]);
+    expect(resolved).toBeUndefined();
   });
 
   it("honors the instance's declared default before model-list order", () => {
@@ -426,6 +457,91 @@ describe("getDefaultProviderInstanceModel", () => {
 
 describe("resolveDefaultProviderModelSelection", () => {
   // regression: #4117 users without Codex got a broken default provider
+  it.each([
+    { models: [] },
+    { models: [{ ...model("retired-codex", false, true), isLegacy: true }] },
+  ])("requires a current model before implicitly selecting Codex (%j)", ({ models }) => {
+    const codex = provider({
+      provider: ProviderDriverKind.make("codex"),
+      instanceId: "codex",
+      models,
+    });
+    const claude = provider({
+      provider: ProviderDriverKind.make("claudeAgent"),
+      instanceId: "claudeAgent",
+      models: [model("claude-current", false, true)],
+    });
+    const stored = {
+      instanceId: codex.instanceId,
+      model: "retired-codex",
+      options: [{ id: "effort", value: "high" }],
+    };
+
+    expect(resolveSelectableProviderInstance([codex, claude], undefined)).toBe(claude.instanceId);
+    expect(resolveDefaultProviderModelSelection([codex, claude], null)).toEqual({
+      instanceId: claude.instanceId,
+      model: "claude-current",
+    });
+    expect(resolveDefaultProviderModelSelection([codex], null)).toBeNull();
+    expect(resolveDefaultProviderModelSelection([codex, claude], stored)).toBe(stored);
+  });
+
+  it("chooses a current model ahead of a retired declared default", () => {
+    const codex = provider({
+      provider: ProviderDriverKind.make("codex"),
+      instanceId: "codex",
+      models: [
+        { ...model("retired-default", false, true), isLegacy: true },
+        model("current-model"),
+      ],
+    });
+
+    expect(resolveDefaultProviderModelSelection([codex], null)).toEqual({
+      instanceId: codex.instanceId,
+      model: "current-model",
+    });
+  });
+
+  it("prefers Codex when multiple ready providers are available", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: "claudeAgent",
+        models: [model("claude-fable-5", false, true)],
+      }),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: [model("gpt-5.6", false, true)],
+      }),
+    ];
+
+    expect(resolveDefaultProviderModelSelection(providers, null)).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6",
+    });
+  });
+
+  it("prefers the built-in Codex instance over a custom Codex instance", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex_work",
+        models: [model("gpt-work", false, true)],
+      }),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: [model("gpt-default", false, true)],
+      }),
+    ];
+
+    expect(resolveDefaultProviderModelSelection(providers, null)).toEqual({
+      instanceId: "codex",
+      model: "gpt-default",
+    });
+  });
+
   it.each([
     ["codex", "codex", "gpt-5.6"],
     ["claudeAgent", "claudeAgent", "claude-fable-5"],

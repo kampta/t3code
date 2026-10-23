@@ -19,6 +19,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import type {
   CodexSettings,
   CustomModelSetting,
+  ProviderInventory,
   ServerProvider,
   ServerProviderState,
   ModelCapabilities,
@@ -36,6 +37,9 @@ import {
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
+  AUTHORITATIVE_PROVIDER_INVENTORY,
+  STALE_PROVIDER_INVENTORY,
+  UNAVAILABLE_PROVIDER_INVENTORY,
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   providerModelsFromSettings,
@@ -85,6 +89,7 @@ const CODEX_PRESENTATION = {
 } as const;
 
 export interface CodexAppServerProviderSnapshot {
+  readonly inventory?: Pick<ProviderInventory, "models" | "skills">;
   readonly account: CodexSchema.V2GetAccountResponse;
   readonly rateLimits?: CodexRateLimitsProbe;
   readonly version: string | undefined;
@@ -509,6 +514,10 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(fu
       ),
     );
   const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child));
+  // Stop the process before closing its protocol readers, which may be waiting on stdout.
+  yield* Effect.addFinalizer(() =>
+    child.kill({ forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER }).pipe(Effect.ignore),
+  );
   const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
     Effect.provide(clientContext),
   );
@@ -534,6 +543,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const accountResponse = yield* client.request("account/read", {});
   if (!accountResponse.account && accountResponse.requiresOpenaiAuth) {
     return {
+      inventory: { models: "unavailable", skills: "unavailable" },
       account: accountResponse,
       version,
       models: [],
@@ -593,6 +603,10 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   );
 
   return {
+    inventory: {
+      models: models === undefined ? "stale" : "authoritative",
+      skills: skillsResponse === undefined ? "stale" : "authoritative",
+    },
     account: accountResponse,
     ...(rateLimits ? { rateLimits } : {}),
     version,
@@ -631,6 +645,7 @@ const makePendingCodexProvider = Effect.fn("CodexProvider.makePendingCodexProvid
       models,
       skills: [],
       probe: {
+        inventory: UNAVAILABLE_PROVIDER_INVENTORY,
         installed: false,
         version: null,
         status: "warning",
@@ -647,6 +662,7 @@ const makePendingCodexProvider = Effect.fn("CodexProvider.makePendingCodexProvid
     models,
     skills: [],
     probe: {
+      inventory: STALE_PROVIDER_INVENTORY,
       installed: false,
       version: null,
       status: "warning",
@@ -721,6 +737,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       models: emptyModels,
       skills: [],
       probe: {
+        inventory: UNAVAILABLE_PROVIDER_INVENTORY,
         installed: false,
         version: null,
         status: "warning",
@@ -754,6 +771,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       models: emptyModels,
       skills: [],
       probe: {
+        inventory: installed ? STALE_PROVIDER_INVENTORY : UNAVAILABLE_PROVIDER_INVENTORY,
         installed,
         version: null,
         status: "error",
@@ -776,6 +794,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       models: emptyModels,
       skills: [],
       probe: {
+        inventory: STALE_PROVIDER_INVENTORY,
         installed: true,
         version: null,
         status: "error",
@@ -786,6 +805,18 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   }
 
   const snapshot = probeResult.success.value;
+  const inventory = snapshot.inventory ?? {
+    models: snapshot.models === undefined ? "stale" : "authoritative",
+    skills: "authoritative",
+  };
+  const staleInventoryKinds = [
+    ...(inventory.models === "stale" ? ["model"] : []),
+    ...(inventory.skills === "stale" ? ["skill"] : []),
+  ];
+  const inventoryMessage =
+    staleInventoryKinds.length > 0
+      ? `Codex ${staleInventoryKinds.join(" and ")} discovery did not complete. T3 Code kept any previously discovered entries.`
+      : undefined;
   const accountStatus = managedAuth
     ? { status: "ready" as const, auth: managedAuth, message: undefined }
     : accountProbeStatus(snapshot);
@@ -830,14 +861,18 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       },
     ],
     probe: {
+      inventory: { ...AUTHORITATIVE_PROVIDER_INVENTORY, ...inventory },
       installed: true,
       version: snapshot.version ?? null,
-      status: snapshot.models === undefined ? "warning" : accountStatus.status,
+      status:
+        accountStatus.status === "ready" && inventory.models === "stale" && !snapshot.models?.length
+          ? "warning"
+          : accountStatus.status,
       auth: accountStatus.auth,
       ...(accountStatus.message
         ? { message: accountStatus.message }
-        : snapshot.models === undefined
-          ? { message: "Codex did not return its model catalog in time." }
+        : inventoryMessage
+          ? { message: inventoryMessage }
           : {}),
       ...(managedAuth ? {} : { usageLimits }),
     },

@@ -4,10 +4,7 @@ import {
   COMPACTION_SUGGESTION_MIN_TOKENS,
   isClaudeResumeCompactionQuestion,
 } from "@t3tools/shared/claudeCompaction";
-import {
-  resolveSelectableProviderInstanceEntry,
-  type ProviderInstanceEntry,
-} from "../../providerInstances";
+import { isProviderInstancePickerReady, type ProviderInstanceEntry } from "../../providerInstances";
 import { getTriggerDisplayModelName, type ModelEsque } from "./providerIconUtils";
 
 // Used when the provider did not report its cache TTL: Claude's 1h cache plus slack.
@@ -38,9 +35,13 @@ export function hasAvailableCompactionProvider(input: {
       )
     : driverProviders;
 
-  return providerSupportsManualCompaction(
-    resolveSelectableProviderInstanceEntry(compatibleProviders, input.instanceId ?? undefined),
-  );
+  // Compaction continues existing history and does not need a new model selection.
+  const provider =
+    compatibleProviders.find(
+      (provider) =>
+        provider.instanceId === input.instanceId && provider.enabled && provider.isAvailable,
+    ) ?? compatibleProviders.find(isProviderInstancePickerReady);
+  return providerSupportsManualCompaction(provider);
 }
 
 export function hasDismissedResumeCompaction(

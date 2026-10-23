@@ -58,10 +58,12 @@ const layerDesktopClerk = (
     copyText: () => Effect.void,
   },
   listeners = new Map<string, (...args: unknown[]) => void>(),
+  isDevelopmentBuild = isDevelopment,
 ) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
     stateDir: "/tmp/t3-state",
     isDevelopment,
+    isDevelopmentBuild,
     appDataDirectory: "/tmp/app-data",
     platform,
   } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
@@ -282,10 +284,11 @@ describe("DesktopClerk", () => {
 });
 
 it.effect(
-  "provider auth deep links navigate and reveal the running desktop without handling Clerk URLs",
+  "provider auth deep links navigate and reveal the packaged Dev desktop without handling Clerk URLs",
   () => {
     storageMock.mockReturnValue(storageAdapter);
     createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
+    const events: string[] = [];
     const listeners = new Map<string, (...args: unknown[]) => void>();
     const revealed = Promise.withResolvers<void>();
     const loadURL = vi.fn(async (_url: string) => undefined);
@@ -303,6 +306,7 @@ it.effect(
     return Effect.gen(function* () {
       const clerk = yield* DesktopClerk.DesktopClerk;
       yield* clerk.configure;
+      assert.include(events, "setPath:userData:/tmp/app-data/t3code-dev");
       const event = { preventDefault: vi.fn() };
       listeners.get("open-url")!(event, "t3code-dev://app/auth/callback?code=clerk-code");
       listeners.get("open-url")!(event, "t3code://app/welcome");
@@ -320,7 +324,9 @@ it.effect(
       assert.equal(event.preventDefault.mock.calls.length, 1);
     }).pipe(
       Effect.scoped,
-      Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, undefined, listeners)),
+      Effect.provide(
+        layerDesktopClerk(false, events, "darwin", undefined, undefined, listeners, true),
+      ),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
       Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
@@ -329,7 +335,7 @@ it.effect(
 );
 
 it.effect.each(["startup", "open-url", "early-second-instance"] as const)(
-  "receives hosted web sign-in through the desktop %s handler",
+  "receives hosted web sign-in through the packaged Dev desktop %s handler",
   (entry) =>
     Effect.gen(function* () {
       storageMock.mockReturnValue(storageAdapter);
@@ -402,7 +408,7 @@ it.effect.each(["startup", "open-url", "early-second-instance"] as const)(
         assert.strictEqual(delivery?.flowId, request.flowId);
         assert.strictEqual(delivery?.returnUrl, request.returnUrl);
       }).pipe(
-        Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, shell, listeners)),
+        Effect.provide(layerDesktopClerk(false, [], "darwin", undefined, shell, listeners, true)),
         Effect.provideService(HostProcess.Arguments, entry === "startup" ? ["t3", link] : ["t3"]),
         Effect.provideService(ElectronApp.ElectronApp, electronApp),
         Effect.provideService(

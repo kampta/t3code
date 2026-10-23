@@ -1,5 +1,4 @@
 import {
-  DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   resolveProjectProviderInstanceEnabled,
   type ModelSelection,
@@ -16,6 +15,7 @@ import {
   resolveProviderInstanceDisplayName,
   shouldShowInstanceBadge,
 } from "@t3tools/client-runtime/state/provider-instance-display";
+import { DEFAULT_PROVIDER_DRIVER_KIND } from "@t3tools/shared/model";
 
 export { normalizeProviderAccentColor, shouldShowInstanceBadge };
 
@@ -216,16 +216,18 @@ export function getDefaultProviderInstanceModel(
 ): string | undefined {
   const entry = getProviderInstanceEntry(providers, instanceId);
   if (!entry) return undefined;
+  const currentModels = entry.models.filter((model) => !model.isLegacy);
   return (
-    entry.models.find((model) => model.isDefault && !model.isCustom)?.slug ??
-    entry.models.find((model) => !model.isCustom)?.slug ??
-    entry.models[0]?.slug ??
-    DEFAULT_MODEL_BY_PROVIDER[entry.driverKind]
+    currentModels.find((model) => model.isDefault && !model.isCustom)?.slug ??
+    currentModels.find((model) => !model.isCustom)?.slug ??
+    currentModels[0]?.slug
   );
 }
 
 const isSelectableProviderInstanceEntry = (entry: ProviderInstanceEntry): boolean =>
   entry.enabled && entry.isAvailable;
+
+const preferredDefaultInstanceId = defaultInstanceIdForDriver(DEFAULT_PROVIDER_DRIVER_KIND);
 
 export function resolveSelectableProviderInstanceEntry(
   entries: ReadonlyArray<ProviderInstanceEntry>,
@@ -237,9 +239,17 @@ export function resolveSelectableProviderInstanceEntry(
       return requested;
     }
   }
+  const isReady = (entry: ProviderInstanceEntry) =>
+    isProviderInstancePickerReady(entry) && entry.models.some((model) => !model.isLegacy);
   return (
-    entries.find(isProviderInstancePickerReady) ??
-    entries.find((entry) => isSelectableProviderInstanceEntry(entry) && entry.status !== "error")
+    entries.find(
+      (entry) =>
+        isReady(entry) &&
+        entry.instanceId === preferredDefaultInstanceId &&
+        entry.driverKind === DEFAULT_PROVIDER_DRIVER_KIND,
+    ) ??
+    entries.find((entry) => isReady(entry) && entry.driverKind === DEFAULT_PROVIDER_DRIVER_KIND) ??
+    entries.find(isReady)
   );
 }
 
