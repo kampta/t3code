@@ -134,6 +134,7 @@ describe("mobile model mentions", () => {
       providerKey: instanceId,
       providerLabel: "Traex",
       providerDriver: "codex",
+      isProviderReady: true,
       isDefault: false,
       isLegacy: false,
       capabilities: null,

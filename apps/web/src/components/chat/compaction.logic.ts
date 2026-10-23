@@ -2,10 +2,7 @@ import type { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts"
 import { msg } from "gt-react";
 
 import { getActiveLocale, m, type MessageResolver } from "../../i18n/messages";
-import {
-  resolveSelectableProviderInstanceEntry,
-  type ProviderInstanceEntry,
-} from "../../providerInstances";
+import { isProviderInstancePickerReady, type ProviderInstanceEntry } from "../../providerInstances";
 
 function providerSupportsManualCompaction(
   provider: ProviderInstanceEntry | null | undefined,
@@ -32,9 +29,13 @@ export function hasAvailableCompactionProvider(input: {
       )
     : driverProviders;
 
-  return providerSupportsManualCompaction(
-    resolveSelectableProviderInstanceEntry(compatibleProviders, input.instanceId ?? undefined),
-  );
+  // Compaction continues existing history and does not need a new model selection.
+  const provider =
+    compatibleProviders.find(
+      (provider) =>
+        provider.instanceId === input.instanceId && provider.enabled && provider.isAvailable,
+    ) ?? compatibleProviders.find(isProviderInstancePickerReady);
+  return providerSupportsManualCompaction(provider);
 }
 
 export function formatContextWindowCompactionMessage(

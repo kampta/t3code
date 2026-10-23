@@ -11,7 +11,11 @@ import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
-import { launchOrReuseRemoteServer, type RemoteT3RunnerOptions } from "./tunnel.ts";
+import {
+  buildRemoteT3RunnerIdentity,
+  launchOrReuseRemoteServer,
+  type RemoteT3RunnerOptions,
+} from "./tunnel.ts";
 
 // Capture exactly the script sent over SSH, then run it with fake remote commands.
 export const captureLauncherFor = Effect.fn("test.captureLauncher")(function* (
@@ -59,6 +63,24 @@ export const captureLauncherFor = Effect.fn("test.captureLauncher")(function* (
 
 export const captureLauncher = captureLauncherFor({ nodeScriptPath: "/fake/server.ts" });
 
+export function readProcessStart(pid: number): string {
+  const procStatPath = `/proc/${pid}/stat`;
+  if (NodeFS.existsSync(procStatPath)) {
+    const stat = NodeFS.readFileSync(procStatPath, "utf8");
+    const fields = stat
+      .slice(stat.lastIndexOf(") ") + 2)
+      .trim()
+      .split(/\s+/u);
+    const bootId = NodeFS.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    return `pid:${pid}:proc:${bootId}:${fields[19] ?? ""}`;
+  }
+  const result = NodeChildProcess.spawnSync("ps", ["-o", "lstart=", "-p", `${pid}`], {
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C" },
+  });
+  return `pid:${pid}:ps:${result.stdout.trim().replace(/\s+/gu, " ")}`;
+}
+
 function holdLock(path: string) {
   const db = new NodeSqlite.DatabaseSync(path);
   db.exec("BEGIN EXCLUSIVE;");
@@ -84,6 +106,9 @@ export function runLauncher(
 ) {
   const root = NodeURL.fileURLToPath(new URL("../../../", import.meta.url));
   const home = NodeFS.mkdtempSync(NodePath.join(root, "packages/ssh/.ssh-launcher-test-"));
+  const serverLifetime = NodePath.join(home, "server-lifetime");
+  NodeChildProcess.execFileSync("mkfifo", [serverLifetime]);
+  const lifetimeFd = NodeFS.openSync(serverLifetime, NodeFS.constants.O_RDWR);
   try {
     const bin = NodePath.join(home, "bin");
     const runtime = NodePath.join(home, ".t3/runtime");
@@ -159,7 +184,10 @@ if [ -n "$TEST_CLOCK_JUMP" ] && [ ! -e "$HOME/jumped" ]; then
   touch "$HOME/jumped"
 fi`,
     );
-    executable("nohup", 'printf "%s" "$$" > "$HOME/started-server"');
+    executable(
+      "nohup",
+      'printf "%s" "$$" > "$HOME/started-server"; exec cat "$HOME/server-lifetime" >/dev/null',
+    );
     // The test process stands in for a recorded server; report the serve command it would run.
     executable(
       "ps",
@@ -175,6 +203,11 @@ PATH=/usr/bin:/bin exec ps "$@"`,
       NodeFS.writeFileSync(NodePath.join(state, "pid"), String(process.pid));
       NodeFS.writeFileSync(NodePath.join(state, "port"), "5999");
       NodeFS.writeFileSync(NodePath.join(state, "managed"), options.recordedKind);
+      NodeFS.writeFileSync(NodePath.join(state, "process-start"), readProcessStart(process.pid));
+      NodeFS.writeFileSync(
+        NodePath.join(state, "runner-id"),
+        buildRemoteT3RunnerIdentity({ nodeScriptPath: "/fake/server.ts" }),
+      );
       const runner = script.split("cat >\"$RUNNER_NEXT\" <<'SH'\n")[1]?.split("\nSH\n")[0];
       if (!runner) throw new Error("runner missing");
       NodeFS.writeFileSync(NodePath.join(state, "run-t3.sh"), runner + "\n");
@@ -249,6 +282,7 @@ ${script}`,
       markerExists: NodeFS.existsSync(markerPath),
     };
   } finally {
+    NodeFS.closeSync(lifetimeFd);
     NodeFS.rmSync(home, { recursive: true, force: true });
   }
 }
