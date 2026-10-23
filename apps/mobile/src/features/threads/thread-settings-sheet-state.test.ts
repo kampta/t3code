@@ -24,6 +24,7 @@ function modelOption(
     providerKey: "codex",
     providerLabel: "Codex",
     providerDriver: "codex",
+    isProviderReady: true,
     isDefault: false,
     isLegacy: false,
     capabilities: {

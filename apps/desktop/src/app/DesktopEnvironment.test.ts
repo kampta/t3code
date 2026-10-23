@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
@@ -73,3 +74,19 @@ describe("DesktopEnvironment", () => {
     }),
   );
 });
+
+it.effect("gives packaged dev builds a separate identity without requiring Vite", () =>
+  Effect.gen(function* () {
+    const environment = yield* makeEnvironment({
+      appVersion: "0.0.22-dev.local",
+      isPackaged: true,
+    });
+
+    assert.equal(environment.isDevelopment, false);
+    assert.equal(environment.isDevelopmentBuild, true);
+    assert.equal(environment.displayName, "T3 Code (Dev)");
+    assert.equal(environment.stateDir, "/Users/alice/.t3/dev");
+    assert.equal(environment.appUserModelId, "com.t3tools.t3code.dev");
+    assert.deepEqual(environment.devServerUrl, Option.none());
+  }),
+);

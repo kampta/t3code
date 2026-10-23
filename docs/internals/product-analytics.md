@@ -1,6 +1,7 @@
 # Product analytics
 
-The server owns analytics delivery, opt-out, and identity for every connected client.
+The server owns analytics delivery, opt-in, and identity for every connected client.
+Telemetry is disabled by default and is enabled with `T3CODE_TELEMETRY_ENABLED=true`.
 Clients do not load the PostHog browser SDK. Client-use events require an
 authenticated connection, so visiting the hosted app without connecting does not
 count as product use.

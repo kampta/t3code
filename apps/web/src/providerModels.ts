@@ -8,12 +8,15 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { createModelCapabilities, resolveSelectableModel } from "@t3tools/shared/model";
+import {
+  createModelCapabilities,
+  DEFAULT_PROVIDER_DRIVER_KIND,
+  resolveSelectableModel,
+} from "@t3tools/shared/model";
 
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
-const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 
 export function formatProviderDriverKindLabel(provider: ProviderDriverKind): string {
   return provider
@@ -46,7 +49,18 @@ export function resolveSelectableProvider(
   if (requestedEntry?.enabled) {
     return requestedEntry.driver;
   }
-  return providers.find((candidate) => candidate.enabled)?.driver ?? DEFAULT_DRIVER_KIND;
+  const isReady = (candidate: ServerProvider) =>
+    candidate.enabled &&
+    candidate.installed &&
+    candidate.status === "ready" &&
+    candidate.availability !== "unavailable";
+  return (
+    providers.find(
+      (candidate) => isReady(candidate) && candidate.driver === DEFAULT_PROVIDER_DRIVER_KIND,
+    )?.driver ??
+    providers.find(isReady)?.driver ??
+    ProviderDriverKind.make("unconfigured")
+  );
 }
 
 export function getProviderModelCapabilities(
