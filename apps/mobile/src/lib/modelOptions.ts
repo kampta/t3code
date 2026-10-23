@@ -3,17 +3,18 @@ import {
   resolveProviderInstanceDisplayName,
   shouldShowInstanceBadge,
 } from "@t3tools/client-runtime/state/provider-instance-display";
-
-import type {
-  ModelCapabilities,
-  ModelSelection,
-  ProjectId,
-  RuntimeMode,
-  ServerConfig as T3ServerConfig,
+import {
+  defaultInstanceIdForDriver,
+  type ModelCapabilities,
+  type ModelSelection,
+  type ProjectId,
+  type RuntimeMode,
+  type ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import { isProviderDriverKind, resolveProjectProviderInstanceEnabled } from "@t3tools/contracts";
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
+  DEFAULT_PROVIDER_DRIVER_KIND,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
@@ -33,6 +34,7 @@ export type ModelOption = {
     readonly accentColor?: string;
     readonly showBadge: boolean;
   };
+  readonly isProviderReady: boolean;
   readonly isDefault: boolean;
   readonly isLegacy: boolean;
   readonly isUnavailable?: boolean;
@@ -229,9 +231,7 @@ export function resolveNewTaskModelSelection(input: {
     input.draftSelection ??
     input.projectDefaultSelection ??
     input.stickySelection ??
-    input.modelOptions.find((option) => option.isDefault && !option.isUnavailable)?.selection ??
-    input.modelOptions.find((option) => !option.isUnavailable)?.selection ??
-    null
+    resolveDefaultModelSelection(input.modelOptions)
   );
 }
 
@@ -264,6 +264,7 @@ export function buildModelOptions(
         : undefined;
   };
   const badgeEntries = (config?.providers ?? []).map((provider) => ({
+    instanceId: provider.instanceId,
     driverKind: provider.driver,
     enabled: provider.enabled,
     acpRegistryAgentId: registryAgentId(provider.instanceId),
@@ -285,6 +286,7 @@ export function buildModelOptions(
       ...(accentColor ? { accentColor } : {}),
       showBadge: shouldShowInstanceBadge(
         {
+          instanceId,
           driverKind: driver,
           accentColor,
           acpRegistryAgentId: registryAgentId(instanceId),
@@ -337,6 +339,7 @@ export function buildModelOptions(
         ...(provider.iconUrl ? { providerIconUrl: provider.iconUrl } : {}),
         isHidden: !model.isCustom && hiddenModels.has(model.slug),
         canHide: !model.isCustom,
+        isProviderReady: provider.status === "ready" && provider.availability !== "unavailable",
         isDefault: model.isDefault === true,
         isLegacy: model.isLegacy === true,
         ...(updateRequired ? { providerUpdateRequired: updateRequired } : {}),
@@ -400,6 +403,7 @@ export function buildModelOptions(
         providerLabel,
         providerDriver,
         providerBadge: providerBadgeFor(fallbackModelSelection.instanceId),
+        isProviderReady: provider?.status === "ready" && provider.availability !== "unavailable",
         isDefault: false,
         isLegacy: model?.isLegacy === true,
         ...(isModelSelectionUnavailable(config, fallbackModelSelection, projectId) ||
@@ -414,6 +418,41 @@ export function buildModelOptions(
   }
 
   return [...options.values()];
+}
+
+export function resolveDefaultModelSelection(
+  options: ReadonlyArray<ModelOption>,
+): ModelSelection | null {
+  const preferredDefaultInstanceId = defaultInstanceIdForDriver(DEFAULT_PROVIDER_DRIVER_KIND);
+  const isReadyCurrent = (option: ModelOption) =>
+    option.isProviderReady && !option.isUnavailable && !option.isLegacy;
+  const preferred =
+    options.find(
+      (option) =>
+        isReadyCurrent(option) &&
+        option.providerKey === preferredDefaultInstanceId &&
+        option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND &&
+        option.isDefault,
+    ) ??
+    options.find(
+      (option) =>
+        isReadyCurrent(option) &&
+        option.providerKey === preferredDefaultInstanceId &&
+        option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND,
+    ) ??
+    options.find(
+      (option) =>
+        isReadyCurrent(option) &&
+        option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND &&
+        option.isDefault,
+    ) ??
+    options.find(
+      (option) => isReadyCurrent(option) && option.providerDriver === DEFAULT_PROVIDER_DRIVER_KIND,
+    ) ??
+    options.find((option) => isReadyCurrent(option) && option.isDefault) ??
+    options.find(isReadyCurrent);
+
+  return preferred?.selection ?? null;
 }
 
 export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyArray<ProviderGroup> {

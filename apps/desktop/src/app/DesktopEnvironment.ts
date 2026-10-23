@@ -15,8 +15,8 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
 import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
-import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 import type { OtlpProtocol } from "@t3tools/shared/observability";
+import { isDevelopmentDesktopVersion, isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 
 export interface MakeDesktopEnvironmentInput {
   readonly dirname: string;
@@ -39,6 +39,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly processArch: string;
     readonly isPackaged: boolean;
     readonly isDevelopment: boolean;
+    readonly isDevelopmentBuild: boolean;
     readonly appVersion: string;
     readonly appPath: string;
     readonly resourcesPath: string;
@@ -148,6 +149,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const homeDirectory = input.homeDirectory;
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
+  const isDevelopmentBuild = isDevelopment || isDevelopmentDesktopVersion(input.appVersion);
   const appDataDirectory =
     input.platform === "win32"
       ? Option.getOrElse(config.appDataDirectory, () =>
@@ -168,13 +170,13 @@ const make = Effect.fn("desktop.environment.make")(function* (
       ? path.join(input.resourcesPath, "server.asar")
       : appRoot;
   const branding = resolveDesktopAppBranding({
-    isDevelopment,
+    isDevelopment: isDevelopmentBuild,
     appVersion: input.appVersion,
   });
   const displayName = branding.displayName;
   const stateDir = resolveDesktopStateDir({
     baseDir,
-    isDevelopment,
+    isDevelopment: isDevelopmentBuild,
     joinPath: path.join,
     t3Home: config.t3Home,
   });
@@ -191,6 +193,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     processArch: input.processArch,
     isPackaged: input.isPackaged,
     isDevelopment,
+    isDevelopmentBuild,
     appVersion: input.appVersion,
     appPath: input.appPath,
     resourcesPath,
@@ -228,9 +231,9 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+      isDevelopmentBuild ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
     ),
-    linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
+    linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopmentBuild),
     linuxApplicationsDir,
     desktopLauncherPath: config.desktopLauncherPath,
     appImagePath: config.appImagePath,

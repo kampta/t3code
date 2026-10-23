@@ -22,6 +22,7 @@ function makeConfig(
   providers: ReadonlyArray<{
     readonly instanceId: string;
     readonly driver: string;
+    readonly enabled?: boolean;
     readonly displayName?: string;
     readonly accentColor?: string;
   }>,
@@ -59,6 +60,21 @@ function makeThread(environmentId: EnvironmentId, instanceId: string): Environme
 }
 
 describe("resolveThreadProviderInstance", () => {
+  it("ignores a turned-off instance when badging the remaining one", () => {
+    const environmentId = EnvironmentId.make("environment-a");
+    const providers = makeConfig([
+      { instanceId: "codex", driver: "codex", enabled: false },
+      { instanceId: "codex_work", driver: "codex", displayName: "Codex Work" },
+    ]).providers;
+
+    expect(
+      resolveThreadProviderInstance(providers, makeThread(environmentId, "codex_work"))?.showBadge,
+    ).toBe(false);
+    expect(
+      resolveThreadProviderInstance(providers, makeThread(environmentId, "codex"))?.showBadge,
+    ).toBe(true);
+  });
+
   it("resolves two environments with the same default instance id independently", () => {
     const environmentA = EnvironmentId.make("environment-a");
     const environmentB = EnvironmentId.make("environment-b");

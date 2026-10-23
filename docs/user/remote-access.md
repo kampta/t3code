@@ -225,7 +225,12 @@ ssh user@example.com 'sh -lc "command -v claude codex"'
 
 If SSH reconnecting fails after an app update, retry the launch once. Removing
 the connection stops a server that T3 Code launched; a server that was already
-running is left alone.
+running is left alone. Closing only the forwarded tunnel leaves a
+launcher-managed server running so a later connection can reuse it.
+
+After an interrupted SSH operation, T3 Code may report a stale operation lock.
+Follow the error's recovery instruction only after confirming that no other
+desktop is launching or removing that connection.
 
 Each desktop app keeps one session on the host for its SSH connection and reuses
 it when it reconnects. Revoke sessions you no longer use in **Settings →

@@ -217,6 +217,26 @@ describe("scoped default model selections", () => {
 });
 
 describe("instance-scoped model selection", () => {
+  it("keeps an explicitly selected legacy system text model", () => {
+    const base = provider({ instanceId: "codex", models: ["retired-model", "current-model"] });
+    const codex = {
+      ...base,
+      models: base.models.map((model) => ({
+        ...model,
+        ...(model.slug === "retired-model" ? { isLegacy: true } : {}),
+      })),
+    };
+    const selection = createModelSelection(codex.instanceId, "retired-model");
+    const settings = {
+      ...settingsWithProviderInstances(),
+      textGenerationModelSelection: selection,
+    };
+    expect(resolveAppModelSelectionState(settings, [codex])).toEqual(selection);
+    expect(resolveAppModelSelectionForInstance(codex.instanceId, settings, [codex], null)).toBe(
+      "current-model",
+    );
+  });
+
   it("keeps custom models on the provider instance that declared them", () => {
     const providers = [
       provider({

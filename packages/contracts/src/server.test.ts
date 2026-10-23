@@ -27,6 +27,17 @@ const baseProviderSnapshot = {
 };
 
 describe("ServerProvider", () => {
+  it("decodes provider inventory freshness", () => {
+    const inventory = {
+      models: "stale",
+      slashCommands: "authoritative",
+      skills: "unavailable",
+    } as const;
+    const parsed = decodeServerProvider({ ...baseProviderSnapshot, inventory });
+
+    expect(parsed.inventory).toEqual(inventory);
+  });
+
   it("preserves installed-version presence through the provider wire codec", () => {
     const encode = Schema.encodeSync(ServerProvider);
     for (const installation of [{}, { installedVersion: null }, { installedVersion: "1.2.3" }]) {

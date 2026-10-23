@@ -108,7 +108,11 @@ export const make = Effect.gen(function* () {
   const shell = yield* ElectronShell.ElectronShell;
 
   // Must not yield: the bridge registers a scheme Electron rejects once ready.
-  const userDataPath = yield* DesktopUserData.resolveUserDataPath(environment);
+  const userDataPath = yield* DesktopUserData.resolveUserDataPath({
+    appDataDirectory: environment.appDataDirectory,
+    isDevelopment: environment.isDevelopmentBuild,
+    platform: environment.platform,
+  });
   yield* electronApp.setPath("userData", userDataPath);
 
   // Clerk skips the profile lock on macOS. Interrupt before runtime construction because quit is asynchronous.
@@ -137,11 +141,15 @@ export const make = Effect.gen(function* () {
   yield* Effect.acquireRelease(
     Effect.try({
       try: () =>
-        createDesktopClerkBridge(environment.stateDir, environment.isDevelopment, userDataPath),
+        createDesktopClerkBridge(
+          environment.stateDir,
+          environment.isDevelopmentBuild,
+          userDataPath,
+        ),
       catch: (cause) =>
         new DesktopClerkBridgeInitializationError({
           stateDir: environment.stateDir,
-          isDevelopment: environment.isDevelopment,
+          isDevelopment: environment.isDevelopmentBuild,
           cause,
         }),
     }),
@@ -151,7 +159,7 @@ export const make = Effect.gen(function* () {
         catch: (cause) =>
           new DesktopClerkBridgeCleanupError({
             stateDir: environment.stateDir,
-            isDevelopment: environment.isDevelopment,
+            isDevelopment: environment.isDevelopmentBuild,
             cause,
           }),
       }).pipe(Effect.orDie),
@@ -167,7 +175,7 @@ export const make = Effect.gen(function* () {
 
       const startProviderAuthHandoff = (value: string | undefined) => {
         if (!value) return false;
-        const request = readCodexAuthHandoff(value, environment.isDevelopment);
+        const request = readCodexAuthHandoff(value, environment.isDevelopmentBuild);
         if (!request) return false;
         void runPromise(
           Effect.gen(function* () {
@@ -193,7 +201,7 @@ export const make = Effect.gen(function* () {
       };
       const resumeProviderAuth = (value: string | undefined) => {
         const destination = providerAuthReturnUrl(value);
-        const expectedOrigin = `${ElectronProtocol.getDesktopScheme(environment.isDevelopment)}://app`;
+        const expectedOrigin = `${ElectronProtocol.getDesktopScheme(environment.isDevelopmentBuild)}://app`;
         if (!destination?.startsWith(`${expectedOrigin}/`)) return false;
         void runPromise(
           Effect.gen(function* () {

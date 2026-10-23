@@ -1,4 +1,4 @@
-import { ProviderDriverKind } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -46,40 +46,92 @@ describe("providerAccentForegroundColor", () => {
 
 describe("shouldShowInstanceBadge", () => {
   it("hides badges for distinct ACP agents sharing the registry driver", () => {
-    const mistral = { driverKind: acpRegistry, acpRegistryAgentId: "mistral-vibe", enabled: true };
-    const devin = { driverKind: acpRegistry, acpRegistryAgentId: "devin", enabled: true };
+    const mistral = {
+      instanceId: ProviderInstanceId.make("mistral"),
+      driverKind: acpRegistry,
+      acpRegistryAgentId: "mistral-vibe",
+      enabled: true,
+    };
+    const devin = {
+      instanceId: ProviderInstanceId.make("devin"),
+      driverKind: acpRegistry,
+      acpRegistryAgentId: "devin",
+      enabled: true,
+    };
     expect(shouldShowInstanceBadge(mistral, [mistral, devin])).toBe(false);
     expect(shouldShowInstanceBadge(devin, [mistral, devin])).toBe(false);
   });
 
   it("distinguishes registry instances whose agent identity is unavailable", () => {
-    const entry = { driverKind: acpRegistry, enabled: true };
-    expect(shouldShowInstanceBadge(entry, [entry, { ...entry }])).toBe(true);
+    const entry = {
+      instanceId: ProviderInstanceId.make("registry_one"),
+      driverKind: acpRegistry,
+      enabled: true,
+    };
+    expect(
+      shouldShowInstanceBadge(entry, [
+        entry,
+        { ...entry, instanceId: ProviderInstanceId.make("registry_two") },
+      ]),
+    ).toBe(true);
   });
 
   it("shows the badge when the entry has an accent color", () => {
-    const entry = { driverKind: codex, accentColor: "#ff8800", enabled: true };
+    const entry = {
+      instanceId: ProviderInstanceId.make("codex"),
+      driverKind: codex,
+      accentColor: "#ff8800",
+      enabled: true,
+    };
     expect(shouldShowInstanceBadge(entry, [entry])).toBe(true);
   });
 
   it("ignores a non-hex accent color", () => {
-    const entry = { driverKind: codex, accentColor: "blue", enabled: true };
+    const entry = {
+      instanceId: ProviderInstanceId.make("codex"),
+      driverKind: codex,
+      accentColor: "blue",
+      enabled: true,
+    };
     expect(shouldShowInstanceBadge(entry, [entry])).toBe(false);
   });
 
   it("shows the badge when two entries share a driver, even without an accent", () => {
-    const first = { driverKind: codex, accentColor: undefined, enabled: true };
-    const second = { driverKind: codex, accentColor: undefined, enabled: true };
+    const first = {
+      instanceId: ProviderInstanceId.make("codex"),
+      driverKind: codex,
+      accentColor: undefined,
+      enabled: true,
+    };
+    const second = {
+      instanceId: ProviderInstanceId.make("codex_work"),
+      driverKind: codex,
+      accentColor: undefined,
+      enabled: true,
+    };
     expect(shouldShowInstanceBadge(first, [first, second])).toBe(true);
   });
 
   it("ignores disabled siblings for enabled instances while distinguishing historical owners", () => {
-    const enabled = { driverKind: codex, enabled: true };
-    const disabled = { driverKind: codex, enabled: false };
+    const enabled = {
+      instanceId: ProviderInstanceId.make("codex"),
+      driverKind: codex,
+      enabled: true,
+    };
+    const disabled = {
+      instanceId: ProviderInstanceId.make("codex_work"),
+      driverKind: codex,
+      enabled: false,
+    };
 
     expect(shouldShowInstanceBadge(enabled, [enabled, disabled])).toBe(false);
     expect(shouldShowInstanceBadge(disabled, [enabled, disabled])).toBe(true);
-    expect(shouldShowInstanceBadge(disabled, [disabled, { ...disabled }])).toBe(true);
+    expect(
+      shouldShowInstanceBadge(disabled, [
+        disabled,
+        { ...disabled, instanceId: ProviderInstanceId.make("codex_personal") },
+      ]),
+    ).toBe(false);
     expect(shouldShowInstanceBadge(disabled, [disabled])).toBe(false);
   });
 });

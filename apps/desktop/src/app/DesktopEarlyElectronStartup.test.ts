@@ -5,6 +5,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   restoreEarlyLinuxDeviceScaleFactor,
   resolveEarlyLinuxPasswordStorePreference,
+  resolveEarlyLinuxElectronOptions,
   resolveLinuxDisableFeaturesSwitch,
 } from "./DesktopEarlyElectronStartup.ts";
 
@@ -13,6 +14,7 @@ describe("DesktopEarlyElectronStartup", () => {
 
   it("reads the persisted linux password-store preference before Electron is ready", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
+      appVersion: "1.2.3",
       env: { T3CODE_HOME: "/home/user/.t3-test" },
       homeDirectory: "/home/user",
       joinPath,
@@ -27,6 +29,7 @@ describe("DesktopEarlyElectronStartup", () => {
 
   it("accepts JSONC in the early desktop settings file", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
+      appVersion: "1.2.3",
       env: { T3CODE_HOME: "/home/user/.t3-test" },
       homeDirectory: "/home/user",
       joinPath,
@@ -41,6 +44,7 @@ describe("DesktopEarlyElectronStartup", () => {
 
   it("falls back to auto when the early settings document is missing or invalid", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
+      appVersion: "1.2.3",
       env: {},
       homeDirectory: "/home/user",
       joinPath,
@@ -133,6 +137,7 @@ describe("DesktopEarlyElectronStartup", () => {
 
 describe("Linux device scale persistence failures", () => {
   const input = {
+    appVersion: "1.2.3",
     env: { T3CODE_HOME: "/isolated" },
     homeDirectory: "/home/user",
     joinPath: NodePath.posix.join,
@@ -196,4 +201,19 @@ describe("Linux device scale persistence failures", () => {
     assert.deepEqual(reads, []);
     assert.deepEqual(applied, []);
   });
+});
+
+it("uses the packaged development identity before Electron is ready", () => {
+  const options = resolveEarlyLinuxElectronOptions({
+    appVersion: "1.2.3-dev.local",
+    env: {},
+    homeDirectory: "/home/user",
+    joinPath: NodePath.posix.join,
+    readFileString: (path) => {
+      assert.equal(path, "/home/user/.t3/dev/desktop-settings.json");
+      return JSON.stringify({ linuxPasswordStore: "auto" });
+    },
+  });
+
+  assert.equal(options.linuxDesktopEntryName, "com.t3tools.T3Code.Development.desktop");
 });
