@@ -58,7 +58,8 @@ import {
 import { requestUrl } from "../requestUrl.ts";
 
 const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
-export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
+export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT =
+  SessionStore.INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT;
 /** Sessions and pairing links T3 Connect minted for a device signed in to the linked account. */
 export const CLOUD_CONNECT_SUBJECT = "cloud-connect";
 
@@ -93,7 +94,6 @@ const PEER_LINK_RENEWAL_STEP = Duration.days(1);
 // the device stays signed in while used. One idle for the whole window pairs again.
 const RENEWABLE_ACCESS_TOKEN_TTL = Duration.hours(1);
 const RENEWABLE_SESSION_WINDOW = Duration.days(30);
-const PAIRING_LINK_SUBJECT = "one-time-token";
 
 export interface McpClientSession {
   readonly sessionId: AuthSessionId;
@@ -1127,10 +1127,9 @@ export const make = Effect.gen(function* () {
             }
             // Only plain pairing links renew. T3 Connect, CLI, desktop and peer sessions keep
             // their own lifetimes, so unlinking Connect or rotating a credential still cuts off.
-            const renewable =
-              input?.proofKeyThumbprint !== undefined &&
+            const paired =
               grant.method === "one-time-token" &&
-              grant.subject === PAIRING_LINK_SUBJECT;
+              grant.subject === SessionStore.PAIRING_LINK_SUBJECT;
             return yield* sessions
               .issue({
                 method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
@@ -1139,10 +1138,14 @@ export const make = Effect.gen(function* () {
                 ...(input?.proofKeyThumbprint
                   ? {
                       proofKeyThumbprint: input.proofKeyThumbprint,
-                      ttl: renewable ? RENEWABLE_ACCESS_TOKEN_TTL : Duration.hours(1),
+                      ttl: paired ? RENEWABLE_ACCESS_TOKEN_TTL : Duration.hours(1),
+                      ...(paired ? { renewalWindow: RENEWABLE_SESSION_WINDOW } : {}),
                     }
-                  : {}),
-                ...(renewable ? { renewalWindow: RENEWABLE_SESSION_WINDOW } : {}),
+                  : {
+                      renewOnUse:
+                        grant.method === "one-time-token" &&
+                        SessionStore.isDirectPairingSubject(grant.subject),
+                    }),
                 replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
                 client: {
                   ...requestMetadata,
