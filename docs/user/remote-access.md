@@ -78,7 +78,8 @@ If your HTTPS endpoint uses a certificate from your own certificate authority,
 install that CA on Android as a **CA certificate** in its security settings; the
 Android app then trusts it.
 
-Pairing authorizes that device for future connections. Use a fresh one-time link
+Pairing authorizes that device for future connections. It stays signed in while
+you use it; a device left unused for 30 days must pair again. Use a fresh one-time link
 for each new device; you do not need the original token to reconnect. Links
 created in Settings can only be copied from the client that created them while
 its Sharing & access page stays open. If you leave or reload that page, create

@@ -10,9 +10,11 @@ import {
 } from "@t3tools/shared/dpop";
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -488,6 +490,29 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         }),
       ),
     ),
+  );
+
+  it.effect("keeps a paired bearer session signed in while it is used", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const pairing = yield* serverAuth.issuePairingCredential();
+      const paired = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        pairing.credential,
+        undefined,
+        { ...requestMetadata, deviceType: "mobile" },
+      );
+      const request = makeBearerRequest(paired.access_token);
+
+      for (const _ of [1, 2, 3]) {
+        yield* TestClock.adjust(Duration.days(20));
+        const session = yield* serverAuth.authenticateHttpRequest(request);
+        expect(session.subject).toBe("one-time-token");
+      }
+      yield* TestClock.adjust(Duration.days(30));
+      const idleError = yield* serverAuth.authenticateHttpRequest(request).pipe(Effect.flip);
+
+      expect(idleError._tag).toBe("ServerAuthInvalidCredentialError");
+    }).pipe(Effect.provide(layerEnvironmentAuth())),
   );
 
   it.effect("issues startup pairing URLs that bootstrap administrative sessions", () =>

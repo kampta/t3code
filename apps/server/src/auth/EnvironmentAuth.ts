@@ -963,7 +963,8 @@ export const make = Effect.gen(function* () {
                       proofKeyThumbprint: input.proofKeyThumbprint,
                       ttl: Duration.hours(1),
                     }
-                  : {}),
+                  : // Paired devices have no way to re-pair themselves, so use keeps them signed in.
+                    { renewOnUse: true }),
                 replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
                 client: {
                   ...requestMetadata,
