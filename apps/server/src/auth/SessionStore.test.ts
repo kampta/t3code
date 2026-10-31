@@ -133,6 +133,30 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
     }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
   );
 
+  it.effect("keeps a paired socket open until its renewed session expires", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStore.SessionStore;
+      const client = yield* sessions.issue({
+        subject: "one-time-token",
+        method: "bearer-access-token",
+        renewOnUse: true,
+      });
+      const invalidated = yield* Deferred.make<void>();
+      const watcher = yield* sessions
+        .awaitInvalidation(client.sessionId)
+        .pipe(
+          Effect.andThen(Deferred.succeed(invalidated, undefined)),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+      yield* TestClock.adjust(Duration.days(20));
+      yield* sessions.verify(client.token);
+      yield* TestClock.adjust(Duration.days(10));
+      expect(yield* Deferred.isDone(invalidated)).toBe(false);
+      yield* TestClock.adjust(Duration.days(20));
+      yield* Fiber.join(watcher);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
+
   it.effect.each([
     { name: "a renewal for the same key", renewal: {}, closesAtMinute: 119 },
     {

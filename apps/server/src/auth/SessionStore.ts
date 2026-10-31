@@ -383,6 +383,7 @@ export class SessionStore extends Context.Service<
       readonly proofKeyThumbprint?: string;
       readonly runtimeModeCeiling?: RuntimeMode;
       readonly peerLink?: boolean;
+      readonly renewOnUse?: boolean;
       readonly replaceActiveForSubjectAndMethod?: boolean;
       readonly replaceSessionId?: AuthSessionId;
     }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
@@ -427,6 +428,7 @@ export class SessionStore extends Context.Service<
 
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
+const SESSION_RENEWAL_STEP = Duration.days(1);
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
 
 const SessionClaims = Schema.Struct({
@@ -440,6 +442,8 @@ const SessionClaims = Schema.Struct({
   rtc: Schema.optionalKey(RuntimeMode),
   /** Signed, so a client cannot shed its peer link's limits. */
   plk: Schema.optionalKey(Schema.Literal(1)),
+  /** Renews on use: the stored expiry, not `exp`, is authoritative. */
+  ren: Schema.optionalKey(Schema.Literal(1)),
   iat: Schema.Number,
   exp: Schema.Number,
 });
@@ -661,6 +665,7 @@ const make = Effect.gen(function* () {
         ...(input?.proofKeyThumbprint ? { jkt: input.proofKeyThumbprint } : {}),
         ...(input?.runtimeModeCeiling ? { rtc: input.runtimeModeCeiling } : {}),
         ...(input?.peerLink === true ? { plk: 1 as const } : {}),
+        ...(input?.renewOnUse === true ? { ren: 1 as const } : {}),
         iat: issuedAt.epochMilliseconds,
         exp: expiresAt.epochMilliseconds,
       };
@@ -808,7 +813,7 @@ const make = Effect.gen(function* () {
           expirationClaim: claims.exp,
         });
       }
-      if (claims.exp <= observedAt.epochMilliseconds) {
+      if (claims.ren !== 1 && claims.exp <= observedAt.epochMilliseconds) {
         return yield* new SessionTokenExpiredError({
           sessionId: claims.sid,
           expiresAt: expiresAt.value,
@@ -833,12 +838,40 @@ const make = Effect.gen(function* () {
         });
       }
 
+      let sessionExpiresAt = expiresAt.value;
+      if (claims.ren === 1) {
+        sessionExpiresAt = row.value.expiresAt;
+        if (sessionExpiresAt.epochMilliseconds <= observedAt.epochMilliseconds) {
+          return yield* new SessionTokenExpiredError({
+            sessionId: claims.sid,
+            expiresAt: sessionExpiresAt,
+            observedAt,
+          });
+        }
+        const renewedAt = DateTime.add(observedAt, {
+          milliseconds: Duration.toMillis(DEFAULT_SESSION_TTL),
+        });
+        if (
+          renewedAt.epochMilliseconds - sessionExpiresAt.epochMilliseconds >=
+          Duration.toMillis(SESSION_RENEWAL_STEP)
+        ) {
+          yield* authSessions
+            .renew({ sessionId: claims.sid, expiresAt: renewedAt })
+            .pipe(
+              Effect.mapError(
+                (cause) => new SessionCredentialVerificationError({ sessionId: claims.sid, cause }),
+              ),
+            );
+          sessionExpiresAt = renewedAt;
+        }
+      }
+
       return {
         sessionId: claims.sid,
         token,
         method: claims.method,
         client: toClientMetadata(row.value.client),
-        expiresAt: expiresAt.value,
+        expiresAt: sessionExpiresAt,
         subject: claims.sub,
         scopes: row.value.scopes,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
@@ -1070,8 +1103,11 @@ const make = Effect.gen(function* () {
         });
         let current = original.value;
         while (true) {
-          const rows = yield* Effect.forEach(chain, readRow);
-          if (rows.some((row) => Option.isNone(row) || row.value.revokedAt !== null)) return;
+          for (const id of chain) {
+            const row = yield* readRow(id);
+            if (Option.isNone(row) || row.value.revokedAt !== null) return;
+            if (id === current.sessionId) current = row.value;
+          }
           const now = yield* DateTime.now;
           const remaining = current.expiresAt.epochMilliseconds - now.epochMilliseconds;
           if (remaining > 0) {

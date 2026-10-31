@@ -92,6 +92,12 @@ export const SetAuthSessionLastConnectedAtInput = Schema.Struct({
 });
 export type SetAuthSessionLastConnectedAtInput = typeof SetAuthSessionLastConnectedAtInput.Type;
 
+export const RenewAuthSessionInput = Schema.Struct({
+  sessionId: AuthSessionId,
+  expiresAt: Schema.DateTimeUtcFromString,
+});
+export type RenewAuthSessionInput = typeof RenewAuthSessionInput.Type;
+
 export class AuthSessionRepository extends Context.Service<
   AuthSessionRepository,
   {
@@ -118,6 +124,9 @@ export class AuthSessionRepository extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<AuthSessionId>, AuthSessionRepositoryError>;
     readonly setLastConnectedAt: (
       input: SetAuthSessionLastConnectedAtInput,
+    ) => Effect.Effect<void, AuthSessionRepositoryError>;
+    readonly renew: (
+      input: RenewAuthSessionInput,
     ) => Effect.Effect<void, AuthSessionRepositoryError>;
   }
 >()("t3/persistence/AuthSessions/AuthSessionRepository") {}
@@ -321,6 +330,18 @@ export const make = Effect.gen(function* () {
       `,
   });
 
+  const renewRow = SqlSchema.void({
+    Request: RenewAuthSessionInput,
+    execute: ({ sessionId, expiresAt }) =>
+      sql`
+        UPDATE auth_sessions
+        SET expires_at = ${expiresAt}
+        WHERE session_id = ${sessionId}
+          AND revoked_at IS NULL
+          AND expires_at < ${expiresAt}
+      `,
+  });
+
   const revokeSessionRows = SqlSchema.findAll({
     Request: RevokeAuthSessionInput,
     Result: Schema.Struct({ sessionId: AuthSessionId }),
@@ -480,6 +501,17 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const renew: AuthSessionRepository["Service"]["renew"] = (input) =>
+    renewRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "AuthSessionRepository.renew:query",
+          "AuthSessionRepository.renew:encodeRequest",
+          { sessionId: input.sessionId },
+        ),
+      ),
+    );
+
   return {
     create,
     createReplacingActive,
@@ -489,6 +521,7 @@ export const make = Effect.gen(function* () {
     revoke,
     revokeAllExcept,
     setLastConnectedAt,
+    renew,
   } satisfies AuthSessionRepository["Service"];
 });
 
