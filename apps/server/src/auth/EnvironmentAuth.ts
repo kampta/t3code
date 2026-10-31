@@ -59,7 +59,8 @@ import {
 import { requestUrl } from "../requestUrl.ts";
 
 const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
-export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
+export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT =
+  SessionStore.INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT;
 /** Sessions and pairing links T3 Connect minted for a device signed in to the linked account. */
 export const CLOUD_CONNECT_SUBJECT = "cloud-connect";
 
@@ -94,7 +95,6 @@ const PEER_LINK_RENEWAL_STEP = Duration.days(1);
 // the device stays signed in while used. One idle for the whole window pairs again.
 const RENEWABLE_ACCESS_TOKEN_TTL = Duration.hours(1);
 const RENEWABLE_SESSION_WINDOW = Duration.days(30);
-const PAIRING_LINK_SUBJECT = "one-time-token";
 
 export interface McpClientSession {
   readonly sessionId: AuthSessionId;
@@ -1164,7 +1164,7 @@ export const make = Effect.gen(function* () {
               const renewable =
                 input?.proofKeyThumbprint !== undefined &&
                 grant.method === "one-time-token" &&
-                grant.subject === PAIRING_LINK_SUBJECT;
+                grant.subject === SessionStore.PAIRING_LINK_SUBJECT;
               const issue = sessions
                 .issue({
                   method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
@@ -1175,7 +1175,11 @@ export const make = Effect.gen(function* () {
                         proofKeyThumbprint: input.proofKeyThumbprint,
                         ttl: renewable ? RENEWABLE_ACCESS_TOKEN_TTL : Duration.hours(1),
                       }
-                    : {}),
+                    : {
+                        renewOnUse:
+                          grant.method === "one-time-token" &&
+                          SessionStore.isDirectPairingSubject(grant.subject),
+                      }),
                   ...(renewable ? { renewalWindow: RENEWABLE_SESSION_WINDOW } : {}),
                   replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
                   client: {

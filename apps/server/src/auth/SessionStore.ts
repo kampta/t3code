@@ -412,6 +412,7 @@ export class SessionStore extends Context.Service<
       readonly proofKeyThumbprint?: string;
       readonly runtimeModeCeiling?: RuntimeMode;
       readonly peerLink?: boolean;
+      readonly renewOnUse?: boolean;
       readonly replaceActiveForSubjectAndMethod?: boolean;
       readonly replaceSessionId?: AuthSessionId;
       /** Keeps the session alive this long past each renewal; `ttl` then bounds only the token. */
@@ -488,6 +489,12 @@ export class SessionStore extends Context.Service<
   }
 >()("t3/auth/SessionStore") {}
 
+export const PAIRING_LINK_SUBJECT = "one-time-token";
+export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
+export const isDirectPairingSubject = (subject: string) =>
+  subject === PAIRING_LINK_SUBJECT || subject === INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT;
+
+const SESSION_RENEWAL_STEP = Duration.days(1);
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
@@ -505,6 +512,8 @@ const SessionClaims = Schema.Struct({
   plk: Schema.optionalKey(Schema.Literal(1)),
   /** Signed, so only sessions issued as renewable can renew. */
   rnw: Schema.optionalKey(Schema.Literal(1)),
+  /** Previously paired bearer clients keep their original token across renewals. */
+  ren: Schema.optionalKey(Schema.Literal(1)),
   iat: Schema.Number,
   exp: Schema.Number,
 });
@@ -748,6 +757,7 @@ const make = Effect.gen(function* () {
         ...(input?.proofKeyThumbprint ? { jkt: input.proofKeyThumbprint } : {}),
         ...(input?.runtimeModeCeiling ? { rtc: input.runtimeModeCeiling } : {}),
         ...(input?.peerLink === true ? { plk: 1 as const } : {}),
+        ...(input?.renewOnUse ? { ren: 1 as const } : {}),
         ...(input?.renewalWindow ? { rnw: 1 as const } : {}),
         iat: issuedAt.epochMilliseconds,
         exp: expiresAt.epochMilliseconds,
@@ -882,9 +892,11 @@ const make = Effect.gen(function* () {
           expirationClaim: claims.exp,
         });
       }
-      // A peer link's session renews while it is used and its token is never
-      // reissued, so the session row holds its deadline, not the token.
-      const rowHoldsDeadline = claims.plk === 1;
+      const pairedBearer =
+        claims.ren === 1 &&
+        claims.method === "bearer-access-token" &&
+        isDirectPairingSubject(claims.sub);
+      const rowHoldsDeadline = claims.plk === 1 || pairedBearer;
       if (!rowHoldsDeadline && claims.exp <= observedAt.epochMilliseconds) {
         return yield* new SessionTokenExpiredError({
           sessionId: claims.sid,
@@ -920,12 +932,28 @@ const make = Effect.gen(function* () {
         });
       }
 
+      let sessionExpiresAt = rowHoldsDeadline ? row.value.expiresAt : expiresAt.value;
+      if (pairedBearer) {
+        const renewedAt = DateTime.add(observedAt, {
+          milliseconds: Duration.toMillis(DEFAULT_SESSION_TTL),
+        });
+        if (
+          DateTime.distance(sessionExpiresAt, renewedAt).pipe(
+            Duration.isGreaterThanOrEqualTo(SESSION_RENEWAL_STEP),
+          )
+        ) {
+          const liveExpiry = yield* extend(claims.sid, renewedAt, SESSION_RENEWAL_STEP);
+          if (Option.isNone(liveExpiry))
+            return yield* new UnknownSessionTokenError({ sessionId: claims.sid });
+          sessionExpiresAt = liveExpiry.value;
+        }
+      }
       return {
         sessionId: claims.sid,
         token,
         method: claims.method,
         client: toClientMetadata(row.value.client),
-        expiresAt: rowHoldsDeadline ? row.value.expiresAt : expiresAt.value,
+        expiresAt: sessionExpiresAt,
         subject: claims.sub,
         scopes: row.value.scopes,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
