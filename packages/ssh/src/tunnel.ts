@@ -474,6 +474,8 @@ ensure_remote_node_path() {
 
 const REMOTE_RUNNER_SCRIPT = `#!/bin/sh
 set -eu
+export T3CODE_TELEMETRY_ENABLED=false
+export T3CODE_OTEL_SDK_DISABLED=true
 @@T3_NODE_ENV_SCRIPT@@
 if [ "\${1:-}" = "serve" ]; then
 @@T3_RECORD_RUNNER_PROCESS_IDENTITY_SCRIPT@@
@@ -487,7 +489,7 @@ if [ -n "$T3_NODE_SCRIPT_PATH" ]; then
     printf 'Remote host is missing node on PATH. Install Node or configure a supported version manager for non-interactive shells.\\n' >&2
     exit 1
   fi
-  exec node "$T3_NODE_SCRIPT_PATH" "$@"
+  T3CODE_TELEMETRY_ENABLED=false T3CODE_OTEL_SDK_DISABLED=true exec node "$T3_NODE_SCRIPT_PATH" "$@"
 fi
 T3_ARCHIVE_VERSION=@@T3_ARCHIVE_VERSION@@
 if [ -z "$T3_ARCHIVE_VERSION" ]; then

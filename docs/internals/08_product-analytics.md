@@ -1,8 +1,6 @@
 # Product analytics
 
-The server owns analytics delivery, opt-out, and identity for every connected client. Clients never
-load the PostHog browser SDK, PostHog person profiles stay disabled, and visiting hosted web without
-an authenticated connection does not count as product use.
+Personal builds use an inert analytics layer. The upstream delivery implementation below is retained for its tests and the fork never enables it in its runtime.
 
 ## Identity
 
@@ -12,8 +10,8 @@ an authenticated connection does not count as product use.
 - **Identity never comes from a provider.** Do not read a provider's sign-in files or derive an id
   or owner from a user's OpenAI, Claude, or other provider account, even hashed: users did not sign
   in to those to be identified by T3 Code.
-- **Resolve owners at query time.** `install.owner_observed` links installs to owners (Connect
-  account, client device). Two Connect accounts are never merged as one person.
+- **Resolve owners at query time.** Upstream analytics can link installs to T3 Connect and
+  device owners. Personal clients omit those analytics identifiers during connection setup.
 - **Hash everywhere with [one helper](../../packages/shared/src/telemetryId.ts).** Clients and
   servers hash with the same SHA-256 helper so IDs correlate; the server accepts only hashes from
   clients.
@@ -42,5 +40,3 @@ an authenticated connection does not count as product use.
 - Delivery ([`AnalyticsService.ts`](../../apps/server/src/telemetry/AnalyticsService.ts)) attaches a
   UUID per event, backs off on failure, and drops batches after bounded retries so a stuck batch
   cannot loop forever.
-- Dev-runner servers and CI smoke tests disable telemetry (and relay tracing) by default so they do
-  not inflate install counts; set `T3CODE_TELEMETRY_ENABLED=true` to test locally.

@@ -481,6 +481,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           port,
           runnerIdentity: SshTunnel.buildRemoteT3RunnerIdentity(runner),
         });
+        NodeFS.unlinkSync(NodePath.join(home, ".t3", "userdata", "server-runtime.json"));
 
         const result = NodeChildProcess.spawnSync("sh", ["-s", "--", stateKey], {
           encoding: "utf8",
@@ -1354,8 +1355,8 @@ esac
         const launch = spawnShellScript(launchScript, env, ["-s", "--", stateKey]);
         await waitForShellStderr(launch.child, "lifecycle-lock-acquired");
         const stopScript = SshTunnel.buildRemoteStopScript(OWNERSHIP_STATE_KEY).replace(
-          "acquire_state_lifecycle_lock\nREMOTE_MANAGED=",
-          "printf 'stop-started\\n' >&2\nacquire_state_lifecycle_lock\nREMOTE_MANAGED=",
+          "\nacquire_state_lifecycle_lock\n",
+          "\nprintf 'stop-started\\n' >&2\nacquire_state_lifecycle_lock\n",
         );
         const stop = spawnShellScript(stopScript, env);
         await waitForShellStderr(stop.child, "stop-started");
@@ -3148,9 +3149,7 @@ const canBind = (port) =>
   const runScript = (home: string, args: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const child = yield* spawner.spawn(
-        ChildProcess.make("sh", args, { env: { HOME: home } }),
-      );
+      const child = yield* spawner.spawn(ChildProcess.make("sh", args, { env: { HOME: home } }));
       const collect = (stream: Stream.Stream<Uint8Array, PlatformError.PlatformError>) =>
         stream.pipe(Stream.decodeText(), Stream.mkString);
       const [stdout, stderr, exitCode] = yield* Effect.all(

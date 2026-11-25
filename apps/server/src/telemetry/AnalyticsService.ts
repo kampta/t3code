@@ -121,7 +121,6 @@ function serverOsFromNodePlatform(platform: string): ClientOs {
 }
 
 /** @public */
-/** @public */
 export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
   const configuredEnabled = Option.getOrUndefined(telemetryConfig.enabled);
@@ -385,4 +384,11 @@ export const make = Effect.gen(function* () {
   return AnalyticsService.of({ record, flush, recordOwners });
 });
 
-export const layer = Layer.effect(AnalyticsService, make);
+export const layer = Layer.succeed(
+  AnalyticsService,
+  AnalyticsService.of({
+    record: Effect.fn("AnalyticsService.record")(() => Effect.succeed(false)),
+    flush: Effect.void,
+    recordOwners: Effect.fn("AnalyticsService.recordOwners")(() => Effect.void),
+  }),
+);

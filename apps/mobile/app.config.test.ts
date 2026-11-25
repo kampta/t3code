@@ -8,6 +8,10 @@ import assetLinks from "../web/public/.well-known/assetlinks.json";
 vi.mock("../../scripts/lib/public-config.ts", () => ({
   loadRepoEnv: () => ({
     APP_VARIANT: process.env.APP_VARIANT,
+    T3CODE_RELAY_URL: process.env.T3CODE_RELAY_URL,
+    EXPO_PUBLIC_OTLP_TRACES_URL: process.env.EXPO_PUBLIC_OTLP_TRACES_URL,
+    EXPO_PUBLIC_OTLP_TRACES_DATASET: process.env.EXPO_PUBLIC_OTLP_TRACES_DATASET,
+    EXPO_PUBLIC_OTLP_TRACES_TOKEN: process.env.EXPO_PUBLIC_OTLP_TRACES_TOKEN,
     T3CODE_IOS_PERSONAL_TEAM: process.env.T3CODE_IOS_PERSONAL_TEAM,
     T3CODE_IOS_PERSONAL_TEAM_ID: process.env.T3CODE_IOS_PERSONAL_TEAM_ID,
     T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID: process.env.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID,
@@ -42,6 +46,20 @@ function pluginNames(config: Awaited<ReturnType<typeof loadConfig>>) {
 }
 
 describe("mobile app config", () => {
+  it("does not configure trace or crash export when T3 Connect is configured", async () => {
+    const config = await loadConfig({
+      APP_VARIANT: "production",
+      T3CODE_RELAY_URL: "https://relay.example.test",
+      EXPO_PUBLIC_OTLP_TRACES_URL: "https://telemetry.example.test/v1/traces",
+      EXPO_PUBLIC_OTLP_TRACES_DATASET: "mobile-traces",
+      EXPO_PUBLIC_OTLP_TRACES_TOKEN: "test-token",
+    });
+
+    expect(config.extra?.relay).toEqual({ url: "https://relay.example.test" });
+    expect(config.extra).not.toHaveProperty("observability");
+    expect(config.extra?.eas).not.toHaveProperty("observe");
+  });
+
   it("preserves the official production signing capabilities", async () => {
     const config = await loadConfig({ APP_VARIANT: "production" });
 

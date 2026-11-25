@@ -49,7 +49,6 @@ import {
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import { useUiStateStore } from "../uiStateStore";
-import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { GUEST_PAGE_PATH } from "../guestPage";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
@@ -92,10 +91,6 @@ export const Route = createRootRoute({
     }
 
     const authGateState = await resolveInitialServerAuthGateState();
-    if (authGateState.status === "authenticated") {
-      // Idempotent, so every navigation can ask for it.
-      void configureClientTracing();
-    }
     if (
       authGateState.status === "authenticated" &&
       getDesktopSnapShotBridge() &&

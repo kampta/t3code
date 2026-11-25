@@ -90,7 +90,6 @@ function layerCloudClient() {
       MobileStorage.MobileStorage,
       MobileStorage.MobileStorage.of({
         loadOrCreateAgentAwarenessDeviceId: Effect.succeed("device-1"),
-        loadOrCreateAnalyticsDeviceId: Effect.succeed("analytics-device-1"),
         loadAgentAwarenessDeviceId: Effect.succeed("device-1"),
         loadAgentAwarenessRegistrationRecord: Effect.succeed(null),
         saveAgentAwarenessRegistrationRecord: () => Effect.void,

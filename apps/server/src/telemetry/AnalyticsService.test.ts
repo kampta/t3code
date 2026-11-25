@@ -115,7 +115,7 @@ const recordTwentyEvents = Effect.gen(function* () {
 });
 
 const analyticsLayerWith = (client: HttpClient.HttpClient, policy?: ManagedPolicyDocument) =>
-  AnalyticsService.layer.pipe(
+  Layer.effect(AnalyticsService.AnalyticsService, AnalyticsService.make).pipe(
     Layer.provideMerge(
       ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-retry-" }),
     ),
@@ -324,7 +324,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         prefix: "t3-telemetry-base-",
       });
 
-      const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
+      const layerTelemetry = Layer.effect(
+        AnalyticsService.AnalyticsService,
+        AnalyticsService.make,
+      ).pipe(Layer.provideMerge(layerServerConfig));
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromUnknown({
           T3CODE_TELEMETRY_ENABLED: true,
@@ -426,7 +429,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
       const layerServerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
         prefix: "t3-telemetry-disabled-",
       });
-      const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
+      const layerTelemetry = Layer.effect(
+        AnalyticsService.AnalyticsService,
+        AnalyticsService.make,
+      ).pipe(Layer.provideMerge(layerServerConfig));
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromUnknown({
           T3CODE_TELEMETRY_ENABLED: false,
@@ -464,3 +470,19 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
     }),
   );
 });
+
+it.effect("the server analytics layer ignores explicit opt-in", () =>
+  Effect.gen(function* () {
+    const analytics = yield* AnalyticsService.AnalyticsService;
+    assert.isFalse(yield* analytics.record("test.event"));
+    assert.isFalse(yield* analytics.record("agent.feedback", {}, { anonymous: true }));
+    yield* analytics.flush;
+  }).pipe(
+    Effect.provide(
+      Layer.merge(
+        AnalyticsService.layer,
+        ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: true })),
+      ),
+    ),
+  ),
+);

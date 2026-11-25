@@ -10,9 +10,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
-import { resolveRelayClientTracingConfig } from "./publicConfig.ts";
-
-const relayClientTracingConfig = resolveRelayClientTracingConfig();
 
 /**
  * `false` once the environment or a managed policy opted out. Until the desktop has read the
@@ -29,7 +26,7 @@ export const allowedFor = (
 /** Relay traces leave the machine for T3 Connect, so a policy with `telemetry: false` stops them. */
 export const relayLayer = (
   resource: Omit<RelayTracing.RelayClientTracingResource, "serviceInstanceId">,
-  tracingConfig = relayClientTracingConfig,
+  tracingConfig: Parameters<typeof RelayTracing.layer>[0] = null,
 ) =>
   Layer.unwrap(
     Effect.gen(function* () {

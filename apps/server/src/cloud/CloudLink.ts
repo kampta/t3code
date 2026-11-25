@@ -1298,7 +1298,6 @@ const make = Effect.gen(function* () {
       relayUrl,
       relayIssuer,
       endpointRuntimeConfig,
-      publishAgentActivity,
       holdWebhooks,
       revoked,
       latestReachability,
@@ -1308,7 +1307,6 @@ const make = Effect.gen(function* () {
         secrets.get(RELAY_URL_SECRET),
         secrets.get(RELAY_ISSUER_SECRET),
         secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG),
-        secrets.get(PUBLISH_AGENT_ACTIVITY_SECRET),
         secrets.get(HOLD_WEBHOOKS_WHILE_OFFLINE_SECRET),
         secrets.get(CLOUD_LINK_REVOKED),
         reachability.latest,
@@ -1333,9 +1331,7 @@ const make = Effect.gen(function* () {
       relayUrl: Option.isSome(relayUrl) ? bytesToString(relayUrl.value) : null,
       relayIssuer: Option.isSome(relayIssuer) ? bytesToString(relayIssuer.value) : null,
       managedTunnelActive: Option.isSome(endpointRuntimeConfig),
-      publishAgentActivity: Option.isSome(publishAgentActivity)
-        ? bytesToString(publishAgentActivity.value) === "true"
-        : false,
+      publishAgentActivity: false,
       holdWebhooksWhileOffline:
         Option.isSome(holdWebhooks) && bytesToString(holdWebhooks.value) === "true",
       ...(Option.isSome(currentReachability) ? { reachability: currentReachability.value } : {}),

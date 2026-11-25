@@ -327,16 +327,15 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
     }),
   );
 
-  it.effect("reports agent activity publishing from the current secret state", () =>
+  it.effect("reports publishing disabled even with a saved opt-in", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-server-environment-publish-test-",
       });
-      const layerTest = Layer.mergeAll(
-        ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer)),
-        ServerSecretStore.layer,
-      ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
+      const layerTest = Layer.mergeAll(ServerEnvironment.layer, ServerSecretStore.layer).pipe(
+        Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+      );
 
       yield* Effect.gen(function* () {
         const secrets = yield* ServerSecretStore.ServerSecretStore;
@@ -357,7 +356,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
 
         yield* secrets.set(RELAY_URL_SECRET, encode("https://relay.example"));
         const linked = yield* serverEnvironment.getDescriptor;
-        expect(linked.capabilities.agentActivityPublishing).toBe(true);
+        expect(linked.capabilities.agentActivityPublishing).toBe(false);
 
         yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, encode("false"));
         const disabled = yield* serverEnvironment.getDescriptor;
